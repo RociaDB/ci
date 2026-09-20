@@ -70,5 +70,11 @@ Il n'y a que **deux déclencheurs**, pas trois. La phase de release n'est pas un
 ## Tests
 
 ```bash
-python3 scripts/squash_tm/tests/test_junit.py
+python3 scripts/squash_tm/tests/test_junit.py   # lecture JUnit et convention
+python3 scripts/verifier-workflows.py           # permissions, références, inputs
 ```
+
+Le second contrôle les invariants qu'un workflow ne révèle qu'à l'exécution :
+un appelé ne peut pas demander plus de permissions que son appelant lui
+accorde, une référence `@v1` doit exister, un `with:` doit nommer un input
+déclaré.

@@ -82,6 +82,11 @@ permissions: {}
 jobs:
   # Rejoue le gate sur l'état réel du trunk. Définition unique, partagée avec la PR.
   quality:
+    # Un workflow appelé ne peut pas demander plus que ce que son
+    # appelant lui accorde : sans cette ligne, le permissions: {} en
+    # tête de fichier réduirait le gate à zéro droit.
+    permissions:
+      contents: read
     uses: RociaDB/ci/.github/workflows/_rust-quality.yml@v1
     with:
       runs_on: ${{ inputs.runs_on }}

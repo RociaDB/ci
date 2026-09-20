@@ -8,4 +8,6 @@ on:
 permissions: {}
 jobs:
   title:
+    permissions:
+      pull-requests: read
     uses: RociaDB/ci/.github/workflows/_pr-title.yml@v1

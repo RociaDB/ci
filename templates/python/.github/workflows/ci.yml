@@ -17,6 +17,9 @@ permissions: {}
 jobs:
   pr:
     if: github.event_name == 'pull_request'
+    # Le job appelé ne peut recevoir que ce qui lui est accordé ici.
+    permissions:
+      contents: read
     uses: RociaDB/ci/.github/workflows/_python-quality.yml@v1
     with:
       runs_on: ubuntu-latest
@@ -24,6 +27,13 @@ jobs:
 
   main:
     if: github.event_name == 'push'
+    # L'union de ce que demandent les jobs de _python-main.yml : le job docker
+    # pousse sur GHCR et signe son attestation de provenance.
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
     uses: RociaDB/ci/.github/workflows/_python-main.yml@v1
     secrets: inherit
     with:
