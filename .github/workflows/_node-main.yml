@@ -1,0 +1,218 @@
+# Node / TypeScript — pipeline sur main.
+# Même structure que _rust-main.yml : c'est release_created qui distingue le push
+# de dev du push de release, il n'y a pas de troisième workflow.
+name: node · main
+
+on:
+  workflow_call:
+    inputs:
+      runs_on:
+        description: 'Label du runner. ubuntu-latest pour les dépôts publics, rocia2 pour les privés.'
+        type: string
+        default: ubuntu-latest
+      node_version:
+        type: string
+        default: '22'
+      audit:
+        type: boolean
+        default: true
+      sonar:
+        description: "Nécessite un runner sur le tailnet — dépôts privés uniquement."
+        type: boolean
+        default: false
+      publish_npm:
+        description: 'Publier le package au moment du release.'
+        type: boolean
+        default: false
+      npm_registry:
+        description: "npmjs (public, avec attestation de provenance) ou github (registre privé de l'organisation)."
+        type: string
+        default: npmjs
+      docker:
+        description: 'Construire et pousser une image multi-arch sur GHCR au moment du release.'
+        type: boolean
+        default: false
+      squash_tm:
+        type: boolean
+        default: false
+      release_environment:
+        type: string
+        default: release
+    secrets:
+      RELEASE_APP_ID:
+        required: false
+      RELEASE_APP_PRIVATE_KEY:
+        required: false
+      SONAR_TOKEN:
+        required: false
+      SONAR_HOST_URL:
+        required: false
+      NPM_TOKEN:
+        required: false
+      SQUASH_TM_URL:
+        required: false
+      SQUASH_TM_TOKEN:
+        required: false
+
+permissions: {}
+
+jobs:
+  quality:
+    uses: RociaDB/ci/.github/workflows/_node-quality.yml@v1
+    with:
+      runs_on: ${{ inputs.runs_on }}
+      node_version: ${{ inputs.node_version }}
+      audit: ${{ inputs.audit }}
+
+  sonar:
+    if: ${{ inputs.sonar }}
+    needs: quality
+    runs-on: ${{ inputs.runs_on }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: test-results
+      - uses: SonarSource/sonarqube-scan-action@v4
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        with:
+          args: >
+            -Dsonar.projectKey=rociadb_${{ github.event.repository.name }}
+            -Dsonar.projectVersion=${{ github.sha }}
+            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+
+  release-please:
+    needs: quality
+    runs-on: ${{ inputs.runs_on }}
+    permissions:
+      contents: read
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          release-type: node
+
+  publish:
+    if: ${{ needs.release-please.outputs.release_created == 'true' && inputs.publish_npm }}
+    needs: release-please
+    runs-on: ${{ inputs.runs_on }}
+    environment: ${{ inputs.release_environment }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write  # OIDC : attestation de provenance npm, aucun token à stocker
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: pnpm
+          registry-url: ${{ inputs.npm_registry == 'github' && 'https://npm.pkg.github.com' || 'https://registry.npmjs.org' }}
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - name: publication
+        env:
+          NODE_AUTH_TOKEN: ${{ inputs.npm_registry == 'github' && secrets.GITHUB_TOKEN || secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.npm_registry }}" = "github" ]; then
+            pnpm publish --no-git-checks
+          else
+            pnpm publish --provenance --access public --no-git-checks
+          fi
+
+  docker:
+    if: ${{ needs.release-please.outputs.release_created == 'true' && inputs.docker }}
+    needs: release-please
+    runs-on: ${{ inputs.runs_on }}
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # La sortie de build (Nitro pour Nuxt) est indépendante de l'architecture :
+      # on la produit une fois, et l'image n'est plus qu'une copie. Aucun RUN,
+      # donc aucune émulation.
+      - run: pnpm run build
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}},value=${{ needs.release-please.outputs.tag_name }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.release-please.outputs.tag_name }}
+            type=semver,pattern={{major}},value=${{ needs.release-please.outputs.tag_name }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  squash-tm:
+    if: ${{ needs.release-please.outputs.release_created == 'true' && inputs.squash_tm }}
+    needs: release-please
+    runs-on: ${{ inputs.runs_on }}
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run test:ci
+        continue-on-error: true
+      - uses: RociaDB/ci/actions/squash-tm-publish@v1
+        with:
+          report: junit.xml
+          version: ${{ needs.release-please.outputs.version }}
+          squash_url: ${{ secrets.SQUASH_TM_URL }}
+          squash_token: ${{ secrets.SQUASH_TM_TOKEN }}

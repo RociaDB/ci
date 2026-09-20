@@ -1,0 +1,23 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Preset Renovate partagé par les dépôts RociaDB.",
+  "extends": ["config:recommended", ":semanticCommits"],
+  "timezone": "Europe/Paris",
+  "schedule": ["before 6am on monday"],
+  "prConcurrentLimit": 3,
+  "prHourlyLimit": 2,
+  "labels": ["dependencies"],
+  "packageRules": [
+    {
+      "description": "Les mises à jour d'actions arrivent groupées : un seul passage de CI.",
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions",
+      "semanticCommitType": "ci"
+    },
+    {
+      "description": "Correctifs et dépendances de développement groupés par écosystème.",
+      "matchUpdateTypes": ["patch", "pin", "digest"],
+      "groupName": "correctifs"
+    }
+  ]
+}

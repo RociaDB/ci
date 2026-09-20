@@ -1,0 +1,205 @@
+# Python — pipeline sur main (gestionnaire uv).
+# Même structure que _rust-main.yml.
+name: python · main
+
+on:
+  workflow_call:
+    inputs:
+      runs_on:
+        description: 'Label du runner. ubuntu-latest pour les dépôts publics, rocia2 pour les privés.'
+        type: string
+        default: ubuntu-latest
+      python_version:
+        type: string
+        default: '3.13'
+      audit:
+        type: boolean
+        default: true
+      sonar:
+        description: "Nécessite un runner sur le tailnet — dépôts privés uniquement."
+        type: boolean
+        default: false
+      publish_pypi:
+        description: 'Publier sur PyPI au moment du release, via Trusted Publishing (OIDC).'
+        type: boolean
+        default: false
+      docker:
+        type: boolean
+        default: false
+      squash_tm:
+        type: boolean
+        default: false
+      release_environment:
+        type: string
+        default: release
+    secrets:
+      RELEASE_APP_ID:
+        required: false
+      RELEASE_APP_PRIVATE_KEY:
+        required: false
+      SONAR_TOKEN:
+        required: false
+      SONAR_HOST_URL:
+        required: false
+      SQUASH_TM_URL:
+        required: false
+      SQUASH_TM_TOKEN:
+        required: false
+
+permissions: {}
+
+jobs:
+  quality:
+    uses: RociaDB/ci/.github/workflows/_python-quality.yml@v1
+    with:
+      runs_on: ${{ inputs.runs_on }}
+      python_version: ${{ inputs.python_version }}
+      audit: ${{ inputs.audit }}
+
+  sonar:
+    if: ${{ inputs.sonar }}
+    needs: quality
+    runs-on: ${{ inputs.runs_on }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: test-results
+      - uses: SonarSource/sonarqube-scan-action@v4
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        with:
+          args: >
+            -Dsonar.projectKey=rociadb_${{ github.event.repository.name }}
+            -Dsonar.projectVersion=${{ github.sha }}
+            -Dsonar.python.coverage.reportPaths=coverage.xml
+
+  release-please:
+    needs: quality
+    runs-on: ${{ inputs.runs_on }}
+    permissions:
+      contents: read
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          release-type: python
+
+  publish:
+    if: ${{ needs.release-please.outputs.release_created == 'true' && inputs.publish_pypi }}
+    needs: release-please
+    runs-on: ${{ inputs.runs_on }}
+    environment: ${{ inputs.release_environment }}
+    permissions:
+      contents: read
+      id-token: write  # OIDC : Trusted Publishing, aucun token PyPI à stocker
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv build
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  docker:
+    if: ${{ needs.release-please.outputs.release_created == 'true' && inputs.docker }}
+    needs: release-please
+    runs-on: ${{ inputs.runs_on }}
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # uv sait résoudre et installer les wheels d'une autre plateforme sans
+      # jamais exécuter de code : on prépare les deux arborescences ici, l'image
+      # ne fait plus que les copier. Aucun RUN, donc aucune émulation.
+      #
+      # Limite connue : une dépendance sans wheel aarch64 publié échouera ici.
+      # Voir docs/onboarding.md pour l'échappatoire (runner ubuntu-24.04-arm).
+      - name: résolution des dépendances par architecture
+        run: |
+          set -euo pipefail
+          uv export --frozen --no-dev --no-emit-project -o "$RUNNER_TEMP/requirements.txt"
+          for pair in "amd64 x86_64-unknown-linux-gnu" "arm64 aarch64-unknown-linux-gnu"; do
+            set -- $pair
+            uv pip install \
+              --python-platform "$2" \
+              --python-version "${{ inputs.python_version }}" \
+              --target "dist/$1/site-packages" \
+              --requirements "$RUNNER_TEMP/requirements.txt"
+          done
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}},value=${{ needs.release-please.outputs.tag_name }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.release-please.outputs.tag_name }}
+            type=semver,pattern={{major}},value=${{ needs.release-please.outputs.tag_name }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  squash-tm:
+    if: ${{ needs.release-please.outputs.release_created == 'true' && inputs.squash_tm }}
+    needs: release-please
+    runs-on: ${{ inputs.runs_on }}
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras --dev
+      - run: uv run pytest --junitxml=junit.xml
+        continue-on-error: true
+      - uses: RociaDB/ci/actions/squash-tm-publish@v1
+        with:
+          report: junit.xml
+          version: ${{ needs.release-please.outputs.version }}
+          squash_url: ${{ secrets.SQUASH_TM_URL }}
+          squash_token: ${{ secrets.SQUASH_TM_TOKEN }}

@@ -1,0 +1,227 @@
+# Rust — pipeline sur main.
+#
+# Un seul déclencheur couvre deux situations : le push qui suit le merge d'une PR
+# de dev, et le push qui suit le merge de la Release PR de release-please. C'est
+# la sortie release_created qui distingue les deux — il n'y a donc pas de
+# troisième workflow « release ».
+name: rust · main
+
+on:
+  workflow_call:
+    inputs:
+      runs_on:
+        description: 'Label du runner. ubuntu-latest pour les dépôts publics, rocia2 pour les privés.'
+        type: string
+        default: ubuntu-latest
+      audit:
+        description: 'Exécuter cargo-deny dans le gate de qualité.'
+        type: boolean
+        default: true
+      sonar:
+        description: "Analyser avec SonarQube. Nécessite un runner sur le tailnet — donc dépôts privés uniquement."
+        type: boolean
+        default: false
+      publish_crate:
+        description: 'Publier sur crates.io au moment du release.'
+        type: boolean
+        default: false
+      docker:
+        description: 'Construire et pousser une image multi-arch sur GHCR au moment du release.'
+        type: boolean
+        default: false
+      binary_name:
+        description: "Nom du binaire à embarquer dans l'image. Défaut : nom du dépôt."
+        type: string
+        default: ''
+      squash_tm:
+        description: 'Publier les résultats de tests dans Squash TM au moment du release.'
+        type: boolean
+        default: false
+      release_environment:
+        description: "Environment GitHub protégeant les publications irréversibles."
+        type: string
+        default: release
+    secrets:
+      RELEASE_APP_ID:
+        required: false
+      RELEASE_APP_PRIVATE_KEY:
+        required: false
+      SONAR_TOKEN:
+        required: false
+      SONAR_HOST_URL:
+        required: false
+      CARGO_REGISTRY_TOKEN:
+        required: false
+      SQUASH_TM_URL:
+        required: false
+      SQUASH_TM_TOKEN:
+        required: false
+
+permissions: {}
+
+jobs:
+  # Rejoue le gate sur l'état réel du trunk. Définition unique, partagée avec la PR.
+  quality:
+    uses: RociaDB/ci/.github/workflows/_rust-quality.yml@v1
+    with:
+      runs_on: ${{ inputs.runs_on }}
+      audit: ${{ inputs.audit }}
+
+  sonar:
+    if: ${{ inputs.sonar }}
+    needs: quality
+    runs-on: ${{ inputs.runs_on }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Sonar attribue les lignes : il lui faut tout l'historique.
+      - uses: actions/download-artifact@v4
+        with:
+          name: test-results
+      - uses: SonarSource/sonarqube-scan-action@v4
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        with:
+          args: >
+            -Dsonar.projectKey=rociadb_${{ github.event.repository.name }}
+            -Dsonar.projectVersion=${{ github.sha }}
+            -Dsonar.rust.lcov.reportPaths=coverage.lcov
+
+  release-please:
+    needs: quality
+    runs-on: ${{ inputs.runs_on }}
+    permissions:
+      contents: read
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      # Indispensable : une PR ouverte avec le GITHUB_TOKEN par défaut ne
+      # déclenche aucun workflow, la Release PR resterait sans check et donc
+      # non mergeable.
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          release-type: rust
+
+  publish:
+    if: ${{ needs.release-please.outputs.release_created == 'true' && inputs.publish_crate }}
+    needs: release-please
+    runs-on: ${{ inputs.runs_on }}
+    environment: ${{ inputs.release_environment }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  docker:
+    if: ${{ needs.release-please.outputs.release_created == 'true' && inputs.docker }}
+    needs: release-please
+    runs-on: ${{ inputs.runs_on }}
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      # Cross-compilation plutôt qu'émulation : QEMU coûte 10 à 20× sur une
+      # compilation Rust, ce qui est intenable sur un runner unique. zigbuild
+      # produit les deux binaires statiques nativement sur amd64.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - uses: mlugg/setup-zig@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
+      - name: compilation des deux architectures
+        env:
+          BIN: ${{ inputs.binary_name || github.event.repository.name }}
+        run: |
+          set -euo pipefail
+          cargo zigbuild --release --locked --target x86_64-unknown-linux-musl
+          cargo zigbuild --release --locked --target aarch64-unknown-linux-musl
+          mkdir -p dist/amd64 dist/arm64
+          cp "target/x86_64-unknown-linux-musl/release/$BIN"  dist/amd64/app
+          cp "target/aarch64-unknown-linux-musl/release/$BIN" dist/arm64/app
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}
+          flavor: latest=false  # latest rend les déploiements Kubernetes non reproductibles
+          tags: |
+            type=semver,pattern={{version}},value=${{ needs.release-please.outputs.tag_name }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.release-please.outputs.tag_name }}
+            type=semver,pattern={{major}},value=${{ needs.release-please.outputs.tag_name }}
+
+      # Le Dockerfile ne doit contenir aucun RUN : seules des instructions COPY,
+      # sinon buildx devrait émuler l'architecture étrangère et l'on reperdrait
+      # tout le bénéfice de la cross-compilation.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  squash-tm:
+    if: ${{ needs.release-please.outputs.release_created == 'true' && inputs.squash_tm }}
+    needs: release-please
+    runs-on: ${{ inputs.runs_on }}
+    continue-on-error: true  # une instance Squash TM indisponible ne casse pas une release
+    permissions:
+      contents: read
+    env:
+      NEXTEST_PROFILE: ci
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      # Rejoué sur le tag plutôt que récupéré depuis l'exécution de main :
+      # la rétention des artefacts est limitée et le run peut avoir été relancé.
+      - run: cargo nextest run --all-features
+        continue-on-error: true
+      - uses: RociaDB/ci/actions/squash-tm-publish@v1
+        with:
+          report: target/nextest/ci/junit.xml
+          version: ${{ needs.release-please.outputs.version }}
+          squash_url: ${{ secrets.SQUASH_TM_URL }}
+          squash_token: ${{ secrets.SQUASH_TM_TOKEN }}

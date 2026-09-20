@@ -1,0 +1,34 @@
+# Toute la logique vit dans RociaDB/ci. Ce fichier ne fait que la câbler.
+# Dépôt PRIVÉ : remplacer ubuntu-latest par rocia2 et passer sonar à true.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
+
+jobs:
+  pr:
+    if: github.event_name == 'pull_request'
+    uses: RociaDB/ci/.github/workflows/_python-quality.yml@v1
+    with:
+      runs_on: ubuntu-latest
+      compat_versions: '[]'
+
+  main:
+    if: github.event_name == 'push'
+    uses: RociaDB/ci/.github/workflows/_python-main.yml@v1
+    secrets: inherit
+    with:
+      runs_on: ubuntu-latest
+      sonar: false
+      publish_pypi: false    # true pour rociadb-core-sdk-python
+      docker: false
+      squash_tm: false

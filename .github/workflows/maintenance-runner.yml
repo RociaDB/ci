@@ -1,0 +1,41 @@
+# Purge du runner self-hosted.
+#
+# rocia2 dispose de moins de 50 Go : les caches cargo et les couches Docker
+# saturent le disque en quelques semaines sans entretien. Ce nettoyage vit ici
+# plutôt que dans chaque dépôt, pour ne rien ajouter aux dépôts consommateurs.
+name: maintenance · runner
+
+on:
+  schedule:
+    - cron: '17 3 * * 0'  # dimanche, heure creuse — le runner est sérialisé
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  purge:
+    runs-on: rocia2
+    permissions: {}
+    steps:
+      - name: espace disque avant
+        run: df -h / | tail -1
+
+      - name: images et couches Docker inutilisées
+        run: docker system prune --all --force --filter 'until=168h'
+
+      - name: registre et caches cargo
+        run: |
+          set -euo pipefail
+          # Les sources décompressées se reconstruisent depuis le cache des
+          # archives : les supprimer ne provoque qu'un retéléchargement partiel.
+          rm -rf "${CARGO_HOME:-$HOME/.cargo}/registry/src" || true
+          find "${CARGO_HOME:-$HOME/.cargo}/registry/cache" -type f -atime +30 -delete || true
+
+      - name: travail des exécutions terminées
+        run: |
+          set -euo pipefail
+          find "${RUNNER_WORKSPACE%/*}" -maxdepth 2 -name target -type d -mtime +14 \
+            -exec rm -rf {} + 2>/dev/null || true
+
+      - name: espace disque après
+        run: df -h / | tail -1

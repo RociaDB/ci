@@ -1,0 +1,88 @@
+# Node / TypeScript — gate de qualité. Appelé sur PR par le stub, et sur main par _node-main.yml.
+# Couvre aussi bien un package npm qu'une application Nuxt SSR.
+name: node · quality
+
+on:
+  workflow_call:
+    inputs:
+      runs_on:
+        description: 'Label du runner. ubuntu-latest pour les dépôts publics, rocia2 pour les privés.'
+        type: string
+        default: ubuntu-latest
+      node_version:
+        description: 'Version Node principale.'
+        type: string
+        default: '22'
+      compat_versions:
+        description: 'Tableau JSON de versions Node supplémentaires, ex. ["20"]. [] désactive le job compat.'
+        type: string
+        default: '[]'
+      audit:
+        description: 'Exécuter pnpm audit. Non bloquant pendant la stabilisation.'
+        type: boolean
+        default: true
+
+permissions: {}
+
+jobs:
+  quality:
+    runs-on: ${{ inputs.runs_on }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm/action-setup doit précéder setup-node pour que `cache: pnpm`
+      # détecte le gestionnaire et active le cache du store.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: format
+        run: pnpm run format:check
+      - name: lint
+        if: ${{ !cancelled() }}
+        run: pnpm run lint
+      - name: types
+        if: ${{ !cancelled() }}
+        run: pnpm run typecheck
+      - name: tests + couverture
+        if: ${{ !cancelled() }}
+        run: pnpm run test:ci
+
+      - name: audit des dépendances
+        if: ${{ !cancelled() && inputs.audit }}
+        continue-on-error: true
+        run: pnpm audit --audit-level=high
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: test-results
+          path: |
+            junit.xml
+            coverage/lcov.info
+          if-no-files-found: warn
+          retention-days: 7
+
+  compat:
+    if: ${{ inputs.compat_versions != '[]' }}
+    runs-on: ${{ inputs.runs_on }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ${{ fromJSON(inputs.compat_versions) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run test:ci

@@ -1,0 +1,35 @@
+# Toute la logique vit dans RociaDB/ci. Ce fichier ne fait que la câbler.
+# Dépôt PRIVÉ : remplacer ubuntu-latest par rocia2 et passer sonar à true.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
+
+jobs:
+  pr:
+    if: github.event_name == 'pull_request'
+    uses: RociaDB/ci/.github/workflows/_node-quality.yml@v1
+    with:
+      runs_on: ubuntu-latest
+      compat_versions: '[]'
+
+  main:
+    if: github.event_name == 'push'
+    uses: RociaDB/ci/.github/workflows/_node-main.yml@v1
+    secrets: inherit
+    with:
+      runs_on: ubuntu-latest
+      sonar: false
+      publish_npm: false     # true pour rociadb-core-sdk-ts
+      npm_registry: npmjs    # github pour rocia-db-theme (registre privé)
+      docker: false          # true pour une application Nuxt SSR
+      squash_tm: false

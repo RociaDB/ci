@@ -1,0 +1,11 @@
+# Les dépôts fusionnent en squash : le titre de la PR devient le message de
+# commit, et c'est lui que release-please lit. Déclencheur séparé de ci.yml pour
+# ne pas relancer toute la CI à chaque modification du titre.
+name: PR title
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+permissions: {}
+jobs:
+  title:
+    uses: RociaDB/ci/.github/workflows/_pr-title.yml@v1

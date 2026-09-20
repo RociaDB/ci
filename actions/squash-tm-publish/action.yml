@@ -1,0 +1,47 @@
+name: Squash TM — publication des résultats
+description: >
+  Lit un rapport JUnit, normalise les références selon la convention RociaDB
+  (<repo>/<classname>#<test>) et publie les résultats dans l'itération de la
+  version. Rapporte les références sans cas de test correspondant.
+
+inputs:
+  report:
+    description: 'Chemin du rapport JUnit. Plusieurs chemins séparés par des espaces.'
+    required: true
+  version:
+    description: "Version publiée — sert de nom d'itération Squash TM."
+    required: true
+  squash_url:
+    description: "URL de base de l'instance Squash TM. Vide : dry-run."
+    required: false
+    default: ''
+  squash_token:
+    description: "Jeton d'API Squash TM."
+    required: false
+    default: ''
+  repo:
+    description: 'Nom du dépôt, préfixe des références. Défaut : dépôt courant.'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: publication
+      shell: bash
+      env:
+        SQUASH_URL: ${{ inputs.squash_url }}
+        SQUASH_TOKEN: ${{ inputs.squash_token }}
+        REPO: ${{ inputs.repo || github.event.repository.name }}
+      run: |
+        set -euo pipefail
+        # Sans URL configurée, le script se contente d'analyser et de rapporter :
+        # utile pour valider la convention avant que l'instance n'existe.
+        args=(--repo "$REPO" --version '${{ inputs.version }}')
+        if [ -n "$SQUASH_URL" ]; then
+          args+=(--url "$SQUASH_URL" --token "$SQUASH_TOKEN")
+        else
+          args+=(--dry-run)
+        fi
+        python3 "${{ github.action_path }}/../../scripts/squash_tm/publish.py" \
+          ${{ inputs.report }} "${args[@]}"

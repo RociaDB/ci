@@ -1,0 +1,83 @@
+# Python — gate de qualité (gestionnaire uv). Appelé sur PR par le stub, et sur main par _python-main.yml.
+name: python · quality
+
+on:
+  workflow_call:
+    inputs:
+      runs_on:
+        description: 'Label du runner. ubuntu-latest pour les dépôts publics, rocia2 pour les privés.'
+        type: string
+        default: ubuntu-latest
+      python_version:
+        description: 'Version Python principale.'
+        type: string
+        default: '3.13'
+      compat_versions:
+        description: 'Tableau JSON de versions Python supplémentaires, ex. ["3.11","3.12"]. [] désactive le job compat.'
+        type: string
+        default: '[]'
+      audit:
+        description: 'Exécuter pip-audit. Non bloquant pendant la stabilisation.'
+        type: boolean
+        default: true
+
+permissions: {}
+
+jobs:
+  quality:
+    runs-on: ${{ inputs.runs_on }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv python install ${{ inputs.python_version }}
+      - run: uv sync --all-extras --dev
+
+      - name: format
+        run: uv run ruff format --check .
+      - name: lint
+        if: ${{ !cancelled() }}
+        run: uv run ruff check .
+      - name: types
+        if: ${{ !cancelled() }}
+        run: uv run mypy .
+      - name: tests + couverture
+        if: ${{ !cancelled() }}
+        run: uv run pytest --junitxml=junit.xml --cov --cov-report=xml
+
+      - name: audit des dépendances
+        if: ${{ !cancelled() && inputs.audit }}
+        continue-on-error: true
+        run: uvx pip-audit
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: test-results
+          path: |
+            junit.xml
+            coverage.xml
+          if-no-files-found: warn
+          retention-days: 7
+
+  compat:
+    if: ${{ inputs.compat_versions != '[]' }}
+    runs-on: ${{ inputs.runs_on }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ${{ fromJSON(inputs.compat_versions) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv python install ${{ matrix.python }}
+      - run: uv sync --all-extras --dev --python ${{ matrix.python }}
+      - run: uv run --python ${{ matrix.python }} pytest

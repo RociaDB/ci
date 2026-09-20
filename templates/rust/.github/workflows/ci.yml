@@ -1,0 +1,37 @@
+# Toute la logique vit dans RociaDB/ci. Ce fichier ne fait que la câbler.
+# Dépôt PRIVÉ : remplacer ubuntu-latest par rocia2 et passer sonar à true.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  # Annulation sur les PR seulement. Jamais sur main : chaque push doit être vu
+  # par release-please, sous peine de perdre un incrément de version.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
+
+jobs:
+  pr:
+    if: github.event_name == 'pull_request'
+    uses: RociaDB/ci/.github/workflows/_rust-quality.yml@v1
+    with:
+      runs_on: ubuntu-latest
+      # SDK publics uniquement : les runners GitHub y sont gratuits et illimités.
+      compat_versions: '[]'
+
+  main:
+    if: github.event_name == 'push'
+    uses: RociaDB/ci/.github/workflows/_rust-main.yml@v1
+    secrets: inherit
+    with:
+      runs_on: ubuntu-latest
+      sonar: false           # true sur un dépôt privé : l'instance est sur le tailnet
+      publish_crate: false   # true pour rociadb-core-sdk-rust
+      docker: false          # true pour un applicatif livré en image
+      squash_tm: false       # true une fois l'instance Squash TM en place

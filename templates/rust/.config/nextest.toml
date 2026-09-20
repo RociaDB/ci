@@ -1,0 +1,10 @@
+# cargo test ne produit pas de rapport JUnit ; nextest si. Comme Squash TM ne
+# consomme que du JUnit, ce fichier est un prérequis et non une optimisation.
+# Le rapport atterrit dans target/nextest/ci/junit.xml.
+
+[profile.ci]
+fail-fast = false
+failure-output = "immediate-final"
+
+[profile.ci.junit]
+path = "junit.xml"

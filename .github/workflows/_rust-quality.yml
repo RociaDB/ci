@@ -1,0 +1,92 @@
+# Rust — gate de qualité. Appelé sur PR par le stub du dépôt, et sur main par _rust-main.yml.
+# Nom de job figé : quality sert de required status check.
+name: rust · quality
+
+on:
+  workflow_call:
+    inputs:
+      runs_on:
+        description: 'Label du runner. ubuntu-latest pour les dépôts publics, rocia2 pour les privés.'
+        type: string
+        default: ubuntu-latest
+      compat_versions:
+        description: 'Tableau JSON de toolchains supplémentaires, ex. ["1.85","beta"]. [] désactive le job compat.'
+        type: string
+        default: '[]'
+      audit:
+        description: 'Exécuter cargo-deny. Non bloquant pendant la stabilisation.'
+        type: boolean
+        default: true
+
+permissions: {}
+
+jobs:
+  # Nom figé : il sert de required status check dans le ruleset d'organisation.
+  quality:
+    runs-on: ${{ inputs.runs_on }}
+    permissions:
+      contents: read
+    env:
+      NEXTEST_PROFILE: ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy, llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,cargo-llvm-cov,cargo-deny
+
+      # Chaînés en !cancelled() : un échec de format n'empêche pas de voir
+      # les erreurs de clippy et de tests dans la même exécution.
+      - name: format
+        run: cargo fmt --all --check
+      - name: clippy
+        if: ${{ !cancelled() }}
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: tests + couverture
+        if: ${{ !cancelled() }}
+        run: cargo llvm-cov nextest --all-features --lcov --output-path coverage.lcov
+
+      - name: audit des dépendances
+        if: ${{ !cancelled() && inputs.audit }}
+        continue-on-error: true
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/RociaDB/ci/v1/config/deny.toml -o "$RUNNER_TEMP/deny.toml"
+          cargo deny --config "$RUNNER_TEMP/deny.toml" check
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: test-results
+          path: |
+            target/nextest/ci/junit.xml
+            coverage.lcov
+          if-no-files-found: warn
+          retention-days: 7
+
+  # Versions supplémentaires : tests seuls, sans lint ni format (déjà couverts
+  # par quality). Job séparé pour que le nom du check requis reste stable.
+  compat:
+    if: ${{ inputs.compat_versions != '[]' }}
+    runs-on: ${{ inputs.runs_on }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: ${{ fromJSON(inputs.compat_versions) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.toolchain }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - run: cargo nextest run --all-features
