@@ -17,6 +17,10 @@ allow = [
     "MPL-2.0",
     "Unicode-3.0",
     "Zlib",
+    # Portée par webpki-roots, qui distribue le magasin de certificats de
+    # Mozilla. Ajoutée après constat, pas par précaution : cette liste est une
+    # politique, et chaque entrée doit être une décision.
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.9
 
@@ -28,6 +32,11 @@ private = { ignore = true }
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Un crate du workspace référencé par chemin n'a pas de version : cargo-deny le
+# compte comme un « * ». La règle vise les dépendances publiées dont la version
+# n'est pas contrainte, pas les crates internes — sans cette ligne, tout
+# workspace multi-crates échoue à l'audit dès le premier jour.
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"
