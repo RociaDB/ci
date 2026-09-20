@@ -76,19 +76,25 @@ jobs:
           INITDB_ARGS: ${{ inputs.postgres_initdb_args }}
         run: |
           set -euo pipefail
+          # Identifiants laissés aux valeurs par défaut de l'image, qui sont
+          # aussi celles du module postgres de testcontainers : un harnais qui
+          # sait parler aux deux n'a alors qu'une adresse à changer.
           docker run --detach --name ci-postgres \
-            --env POSTGRES_USER=ci \
-            --env POSTGRES_PASSWORD=ci \
-            --env POSTGRES_DB=ci \
+            --env POSTGRES_PASSWORD=postgres \
             --env POSTGRES_INITDB_ARGS="$INITDB_ARGS" \
             --publish 127.0.0.1:5432:5432 \
             "$IMAGE"
           for _ in $(seq 60); do
-            docker exec ci-postgres pg_isready -U ci -d ci >/dev/null 2>&1 && break
+            docker exec ci-postgres pg_isready -U postgres >/dev/null 2>&1 && break
             sleep 1
           done
-          docker exec ci-postgres pg_isready -U ci -d ci
-          echo "DATABASE_URL=postgres://ci:ci@127.0.0.1:5432/ci" >> "$GITHUB_ENV"
+          docker exec ci-postgres pg_isready -U postgres
+          {
+            echo "DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres"
+            echo "CI_POSTGRES_HOTE=127.0.0.1"
+            echo "CI_POSTGRES_PORT=5432"
+            echo "CI_POSTGRES_CONTENEUR=ci-postgres"
+          } >> "$GITHUB_ENV"
 
       # Chaînés en !cancelled() : un échec de format n'empêche pas de voir
       # les erreurs de clippy et de tests dans la même exécution.
