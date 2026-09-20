@@ -1,430 +1,496 @@
-# Cadrage CI/CD RociaDB — questionnaire de décision
+# Cadrage CI/CD RociaDB — décisions
 
-> À compléter. Chaque question a une **réponse par défaut** (ma recommandation).
-> Tu peux répondre globalement : « défaut partout sauf A2, D3, F1 », puis détailler
-> uniquement celles-là.
->
-> Une fois complété, ce document devient le registre de décisions du projet CI.
+Registre des décisions du projet CI. Les questions ouvertes restantes sont en fin
+de document. La version initiale (questionnaire vierge) reste dans l'historique git.
 
-**Périmètre :** 14 repos de l'organisation RociaDB — 6 publics
-(`rociadb-core-sdk-rust`, `rociadb-core-sdk-python`, `rociadb-core-sdk-ts`,
-`example-rust-project`, `example-python-project`, `example-ts-project`)
-et 8 privés (`ci`, `rocia-db-core`, `rocia-db-core-backend`, `rocia-db-core-ui`,
-`rocia-db-admin`, `rocia-db-orchestrator`, `rocia-db-ticket`, `rocia-db-theme`).
+**Périmètre outillé :** ce dépôt fournit les workflows réutilisables et les
+templates. **Aucun dépôt existant n'est migré automatiquement** — la migration est
+une opération manuelle, dépôt par dépôt, décrite dans [`onboarding.md`](onboarding.md).
 
 ---
 
-## A — Décisions bloquantes
+## A — Décisions structurantes
 
-À trancher avant d'écrire la première ligne de YAML : chacune change la forme du pipeline.
+### A1 — Visibilité du dépôt `ci` : **public** *(action manuelle requise)*
 
-### A1 — Visibilité du repo `ci`
+Un dépôt public ne peut pas appeler un workflow réutilisable hébergé dans un dépôt
+privé. 6 dépôts sur 14 sont publics, donc `ci` doit être public.
 
-**Ce que ça bloque :** un repo public ne peut pas appeler un reusable workflow
-hébergé dans un repo privé. 6 repos sur 14 sont publics. `ci` est privé aujourd'hui.
+⚠️ **`RociaDB/ci` est encore privé aujourd'hui.** Le passage en public est une
+action manuelle à faire dans les settings du dépôt, non automatisable sans risque.
+Tant qu'elle n'est pas faite, seuls les dépôts privés peuvent consommer ces
+workflows.
 
-- **(a) `ci` devient public** — tout le monde peut l'appeler. Contrainte : zéro secret,
-  zéro URL interne, zéro nom de runner en dur ; tout passe par variables/secrets d'org.
-- (b) `ci` reste privé — les 6 repos publics dupliquent leurs workflows à la main.
-- (c) GitHub Enterprise → visibilité `internal`, qui lève la restriction.
+Conséquence permanente : **aucun secret, aucune URL interne, aucun nom d'hôte en
+dur dans ce dépôt.** Tout passe par des variables et secrets d'organisation.
 
-**Ma reco : (a).** Un reusable workflow ne contient aucun secret par construction
-(ils arrivent via `secrets: inherit` à l'appel). (b) reconstruit le problème qu'on
-cherche à supprimer.
+### A2 — SonarQube : **Community, sur `main` uniquement, et opt-in**
 
-**Réponse :**
+Sonar n'est pas encore déployé ; il le sera derrière une **URL Tailscale**.
 
-### A2 — Édition SonarQube
+Deux conséquences qui n'étaient pas dans la synthèse initiale :
 
-**Ce que ça bloque :** l'analyse de PR et de branches est une fonctionnalité
-Developer Edition. En Community, seule la branche principale est analysable — donc
-pas de quality gate bloquant sur PR, quoi qu'en dise le document de synthèse.
+1. **L'analyse de PR reste hors de portée** (fonctionnalité Developer Edition).
+   Le quality gate n'est donc pas un garde-fou de merge : Sonar est un tableau de
+   bord de dette sur `main`. Le vrai gate PR, c'est lint + types + tests + couverture.
+2. **Une URL Tailscale n'est joignable que depuis le tailnet.** Les runners
+   GitHub (`ubuntu-latest`) ne peuvent pas l'atteindre. Sonar ne peut donc tourner
+   que sur `rocia2`, c'est-à-dire **sur les dépôts privés uniquement**.
 
-- (a) **Developer Edition** — analyse PR native, décoration GitHub, gate sur new code. Payant, tarifé aux lignes de code.
-- (b) Community + `mc1arke/sonarqube-community-branch-plugin` — non supporté par SonarSource, **aucun chemin de migration** vers les éditions commerciales, casse à chaque upgrade.
-- (c) **Community tel quel** — Sonar sur `main` uniquement, en tableau de bord de dette ; le vrai gate PR = lint + tests + couverture.
-- (d) Abandonner Sonar — CodeQL (gratuit sur les repos publics) + clippy/ruff/eslint + couverture.
+Implémentation : input `sonar` (booléen, défaut `false`) sur les workflows `main`.
+Pour l'activer un jour sur un dépôt public, il faudrait ajouter
+`tailscale/github-action` au runner GitHub — possible, mais cela expose un accès
+tailnet à la CI d'un dépôt public. Non retenu par défaut.
 
-**Ma reco :** si Sonar est déjà en production et consulté → **(a)**, seul chemin
-supporté. Sinon **(c)** pour démarrer, et on réévalue quand le besoin de gate PR
-devient concret. J'écarte (b) : la dette de maintenance dépasse le gain.
+### A3 — Identité release-please : **GitHub App d'organisation**
 
-**Réponse :**
+Une PR créée avec le `GITHUB_TOKEN` par défaut ne déclenche aucun workflow. Sans
+App, la Release PR n'aurait jamais de check et resterait non mergeable.
 
-### A3 — Identité utilisée par release-please
+Secrets d'organisation attendus : `RELEASE_APP_ID`, `RELEASE_APP_PRIVATE_KEY`.
+Voir [`secrets.md`](secrets.md).
 
-**Ce que ça bloque :** une PR créée avec le `GITHUB_TOKEN` par défaut ne déclenche
-aucun workflow (anti-récursion GitHub). Si `Build + Tests` est en required check,
-la Release PR reste sans check et **impossible à merger, définitivement**.
+### A4 — Plan GitHub : **Free** — limites à assumer *(question ouverte)*
 
-- (a) **GitHub App d'organisation** + `actions/create-github-app-token`.
-- (b) PAT fine-grained sur un compte machine — secret à faire tourner, compte à ne jamais supprimer.
-- (c) `GITHUB_TOKEN` + on retire les required checks sur la Release PR — trou dans le garde-fou.
+Le plan Free contraint le projet plus que l'outillage. Trois limites à connaître :
 
-**Ma reco : (a).** Une App, installée une fois sur l'org, sert aussi aux autres
-automatisations à venir. C'est ~20 minutes de setup.
+| Limite | Effet |
+|---|---|
+| **Pas de branch protection ni de rulesets sur les dépôts privés** | Les required status checks sont **impossibles** sur les 8 dépôts privés. La CI tourne et signale, mais rien n'empêche de merger une PR rouge. |
+| 2 000 minutes/mois de runners GitHub sur les dépôts privés | C'est la raison d'être de `rocia2`. Les dépôts publics restent illimités et gratuits. |
+| GitHub Packages privés : 500 Mo de stockage, 1 Go de transfert/mois | Très serré pour 6 dépôts × images multi-arch × plusieurs versions. Saturation en quelques semaines. |
 
-**Réponse :**
-
----
-
-## B — Architecture du repo `ci`
-
-### B1 — Granularité des reusable workflows
-
-- (a) **Un workflow par (langage × phase)** : `rust-pr`, `rust-main`, `rust-release`, idem node/python → 9 fichiers.
-- (b) Un workflow par phase avec un input `language` → 3 fichiers, mais un sapin de `if:`.
-- (c) Uniquement des composite actions, chaque repo assemble son workflow.
-
-**Ma reco : (a) pour les workflows + (c) pour les briques communes** (setup +
-cache, normalisation de couverture, publication Squash TM). (b) devient illisible
-dès le troisième cas particulier.
-
-**Réponse :**
-
-### B2 — Épinglage côté repos appelants
-
-- (a) **Tag majeur flottant `@v1`**, déplacé à chaque release de `ci`.
-- (b) `@main` — propagation immédiate, casse immédiate aussi.
-- (c) SHA épinglé — le plus sûr, mais 14 repos à mettre à jour à chaque correctif.
-
-**Ma reco : (a) partout**, sauf les 3 repos `example-*` qui pointent sur `@main`
-et servent de canaris : ils cassent avant les vrais repos.
-
-**Réponse :**
-
-### B3 — Ordre de déploiement / repos pilotes
-
-**Ma reco :** `example-rust-project`, `example-python-project`, `example-ts-project`
-d'abord — publics, sans enjeu, et ils valident le chemin public → public. Puis un
-repo privé pour valider public → privé avec secrets et runner self-hosted.
-
-**Question : quel repo privé en premier ?** (`rocia-db-ticket` semble le moins
-critique, mais tu connais mieux.)
-
-**Réponse :**
-
-### B4 — Un repo = un langage ?
-
-**Ce que ça change :** tout. Matrices, `paths-filter`, et surtout le mode de
-release-please (mono-package vs manifest multi-package).
-
-**Question :** y a-t-il des repos polyglottes ou monorepo ? `rocia-db-core-ui` +
-`rocia-db-core-backend` sont-ils deux repos ou un futur monorepo ? `rocia-db-core`
-contient quoi ?
-
-**Réponse :**
-
-### B5 — Mode release-please
-
-- (a) **Mode `manifest`** (`release-please-config.json` + `.release-please-manifest.json`) même pour les repos mono-package.
-- (b) Mode simple avec `release-type` en input.
-
-**Ma reco : (a).** C'est le mode maintenu, et ça évite une migration le jour où un
-repo devient multi-package. Config générée depuis un template commun dans `ci`.
-
-**Réponse :**
+Le « garde-fou avant merge » de la synthèse initiale ne s'applique donc **qu'aux
+dépôts publics** en l'état. Voir la question ouverte **Q1**.
 
 ---
 
-## C — Runners et sécurité
+## B — Architecture du dépôt `ci`
 
-### C1 — Répartition `rocia2` / `ubuntu-latest`
+### B1 — Granularité : un workflow réutilisable par (langage × phase)
 
-**Ma reco :** repos **publics → `ubuntu-latest`** (minutes gratuites et illimitées
-sur les repos publics, et surtout aucun code de fork n'approche la VPS) ;
-repos **privés → `rocia2`**. Techniquement : un input `runs-on` dans chaque
-reusable workflow, défaut `ubuntu-latest`.
+`_rust-pr.yml`, `_rust-main.yml`, et l'équivalent Node et Python, plus
+`_pr-title.yml` partagé. Sept fichiers.
 
-**Réponse :**
+**Correction par rapport à la synthèse initiale :** il n'y a **pas trois
+déclencheurs mais deux**. La phase « release » n'est pas un événement distinct :
+c'est la même exécution sur `push: main` où release-please rapporte
+`release_created == true` après le merge de sa Release PR. Les jobs `publish`,
+`docker` et `squash-tm` sont donc des jobs conditionnels de `_<lang>-main.yml`,
+pas un troisième workflow.
 
-### C2 — Durcissement de `rocia2`
+Chaque dépôt consommateur a donc **deux fichiers** : `pr.yml` et `main.yml`.
 
-Un runner persistant est *stateful* : un job peut empoisonner le cache, le
-`~/.cargo` ou le `target/` du job suivant. Un runner group ne protège pas de ça.
+### B1bis — Un seul job par phase, pas un job par gate
 
-**Ma reco :** runners `--ephemeral` + jobs en conteneur. Si c'est trop lourd à
-court terme, au minimum : un runner group dédié, `pull_request` depuis les forks
-désactivé, et jamais de `pull_request_target` avec checkout du head de PR.
+Conséquence directe du runner unique (C3) : des jobs parallèles se sérialisent de
+toute façon, et chacun repaie le checkout et le setup. Les gates (format, lint,
+types, tests) sont donc des **étapes** d'un job `quality` unique, chaînées en
+`if: ${{ !cancelled() }}` pour obtenir tous les retours en une seule exécution.
 
-**Questions :** `rocia2` est-il un runner unique ou plusieurs ? Combien de jobs en
-parallèle ? Docker est-il disponible dessus pour des jobs conteneurisés ?
+### B2 — Épinglage : `@v1` flottant
 
-**Réponse :**
+Les dépôts consommateurs appellent `RociaDB/ci/.github/workflows/_rust-pr.yml@v1`.
+Le tag `v1` est déplacé à chaque release de `ci`.
 
-### C3 — Plan GitHub de l'organisation
+Note de maintenance : les actions composites internes sont référencées en dur en
+`@v1` dans les workflows (GitHub n'expose pas de manière fiable la ref de
+chargement d'un workflow réutilisable). **Au passage en `v2`, ces références
+internes sont à bumper.** Voir [`conventions.md`](conventions.md).
 
-**Question :** Free, Team ou Enterprise ? Ça détermine les minutes disponibles sur
-les repos privés (donc l'intérêt réel de `rocia2`), la disponibilité de la merge
-queue, et celle des rulesets d'org sur les repos privés.
+### B3 — Validation : auto-test interne, aucun dépôt existant touché
 
-**Réponse :**
+Aucun dépôt de l'organisation n'est migré par ce projet. La validation se fait sur
+des fixtures internes (`tests/fixtures/`) exercées par `selftest.yml`, qui appelle
+les workflows réutilisables de ce dépôt sur lui-même.
 
-### C4 — Merge queue ?
+Limite assumée : les chemins `publish`, `docker` et `squash-tm` ne sont pas
+auto-testables sans secrets ni registres réels. Ils seront validés sur le premier
+dépôt volontaire.
 
-Le document rejoue `Build + Tests` sur `main` après le merge. C'est un doublon si
-on exige les branches à jour, et la vraie réponse trunk-based aux conflits
-sémantiques, c'est la merge queue (`merge_group`).
+### B4 — Un dépôt = un langage
 
-**Ma reco : pas tout de suite.** Le double run est un coût acceptable et une
-sécurité réelle. On introduit la merge queue quand le volume de PR concurrentes la
-justifie.
+Pas de monorepo, pas de fusion back/front. Un dépôt peut contenir back **et**
+front, mais alors dans un seul langage avec un framework dédié (Nuxt SSR).
+Conséquence : le workflow Node couvre aussi bien un package npm qu'une application
+Nuxt — la cible de publication est un input, pas un workflow distinct.
 
-**Réponse :**
+### B5 — release-please : **mode simple** *(révision)*
+
+Je recommandais le mode `manifest`. La réponse B4 retire l'argument : pas de
+monorepo, donc pas de multi-package. Le mode simple (`release-type: rust|node|python`)
+expose des outputs plats (`release_created`, `tag_name`, `version`) au lieu des
+outputs préfixés `.--tag_name` du mode manifest, ce qui rend les templates
+nettement plus lisibles pour ceux qui les maintiendront.
+
+Cas non couvert : un **workspace Cargo** multi-crates à versionner indépendamment
+nécessiterait le mode manifest. Non implémenté — à traiter le jour où un dépôt le
+demande, plutôt qu'à moitié aujourd'hui.
+
+---
+
+## C — Runners
+
+### C1 — Répartition
+
+| Dépôts | Runner | Raison |
+|---|---|---|
+| Publics | `ubuntu-latest` | Minutes gratuites illimitées, et aucun code de fork n'approche la VPS |
+| Privés | `rocia2` | Préserve le quota de 2 000 min/mois |
+
+Input `runs_on` sur tous les workflows, défaut `ubuntu-latest`.
+
+### C2 / C3 — Un seul runner, plan Free
+
+Un runner unique signifie **exécution sérialisée**. Trois conséquences appliquées
+dans les templates :
+
+- un seul job par phase (B1bis) ;
+- `concurrency` avec `cancel-in-progress: true` sur les PR, **jamais** sur `main` ;
+- pas de matrice de versions par défaut.
+
+Durcissement recommandé quand un deuxième runner arrivera : runners `--ephemeral`,
+jobs en conteneur. Un runner persistant est *stateful* — un job peut polluer le
+cache du suivant. Voir [`runner.md`](runner.md).
+
+### C4 — Pas de merge queue
+
+Indisponible sur les dépôts privés en plan Free, et non justifiée au volume actuel.
 
 ---
 
 ## D — Qualité et tests
 
-### D1 — Quels gates sont bloquants sur PR ?
+### D1 — Gates
 
-| Gate | Ma reco |
-|---|---|
-| Build / compile | bloquant J1 |
-| Tests unitaires | bloquant J1 |
-| Format (`fmt --check`, prettier, ruff format) | bloquant J1 |
-| Lint (clippy `-D warnings`, ruff, eslint) | bloquant J1 |
-| Types (`tsc --noEmit`, mypy) | bloquant J1 |
-| Titre de PR conventional | bloquant J1 |
-| Couverture (seuil new code) | informatif 1 mois, puis bloquant |
-| Audit dépendances (`cargo-deny`, `pip-audit`, `pnpm audit`) | informatif 1 mois, puis bloquant |
-| Quality gate Sonar | selon A2 |
+Tous exécutés dans le job `quality`, en étapes chaînées :
 
-Le document assimile « qualité de code » à SonarQube. Les linters sont plus
-rapides, tournent sur PR, et attrapent autre chose — c'est le gate le moins cher
-du lot et il était absent.
+| Gate | Rust | Node | Python |
+|---|---|---|---|
+| Format | `cargo fmt --check` | `prettier --check` | `ruff format --check` |
+| Lint | `cargo clippy -D warnings` | `eslint` | `ruff check` |
+| Types | *(compilateur)* | `tsc --noEmit` | `mypy` |
+| Tests | `cargo nextest` | `vitest run` | `pytest` |
+| Couverture | `cargo-llvm-cov` | `vitest --coverage` | `pytest-cov` |
+| Audit deps | `cargo-deny` | `pnpm audit` | `uv pip audit` |
 
-**Réponse :**
+Audit et couverture non bloquants au démarrage (`continue-on-error`), à resserrer
+après un mois de stabilisation.
 
-### D2 — Seuil de couverture
+### D2 — Couverture : pas de seuil global
 
-**Ma reco :** aucun seuil global au démarrage (le code existant va le faire
-échouer partout). Seuil sur le **new code uniquement** : 80 % via Sonar si
-Developer Edition, sinon `diff-cover` sur le diff de la PR.
+Seuil sur le new code uniquement, via `diff-cover` (Sonar Community ne le fait pas).
+Désactivé au démarrage, activé dépôt par dépôt.
 
-**Réponse :**
+### D3 — Outillage confirmé
 
-### D3 — Outillage par écosystème — à confirmer / corriger
+- **Rust** — `cargo fmt`, `clippy`, **`cargo nextest`** (voir D4), `cargo-llvm-cov`, `cargo-deny`.
+- **Python** — **`uv`** + `astral-sh/setup-uv`, `ruff` (format + lint), `mypy`, `pytest`.
+- **Node** — **pnpm** + **vitest uniquement**, `eslint`, `prettier`, `tsc --noEmit`.
 
-**Rust** — `cargo fmt --check`, `cargo clippy -D warnings`, `cargo nextest`,
-couverture `cargo-llvm-cov`, audit `cargo-deny`, cache `Swatinem/rust-cache`.
+### D4 — JUnit XML partout
 
-**Python** — **quel gestionnaire : `uv`, `poetry` ou `pip` ?** C'est la question qui
-a le plus d'impact sur le workflow. Ma reco : `uv` + `astral-sh/setup-uv`
-(le cache de `actions/setup-python` est médiocre en comparaison). Lint `ruff`
-(remplace black + flake8 + isort), types `mypy` ou `pyright`, tests `pytest`.
-
-**Node** — pnpm confirmé (`pnpm/action-setup` **avant** `actions/setup-node`, comme
-le note le document). Lint eslint + prettier, ou `biome` si vous démarrez propre.
-Types `tsc --noEmit`. Tests : **vitest ou jest ?**
-
-**Réponse :**
-
-### D4 — Format des rapports de tests
-
-**Ma reco : JUnit XML partout**, c'est ce que Squash TM consomme.
-Conséquence importante côté Rust : `cargo test` ne produit pas de JUnit,
-**`cargo nextest` si** (via `[profile.ci.junit]`). C'est l'argument décisif pour
-nextest, au-delà de sa vitesse.
-
-**Réponse :**
+`cargo test` ne produit pas de JUnit ; **`cargo nextest` si**, via
+`[profile.ci.junit]` dans `.config/nextest.toml`. C'est ce qui rend nextest
+obligatoire et non optionnel, puisque Squash TM consomme du JUnit.
 
 ---
 
 ## E — Release et publication
 
-### E1 — Qui publie quoi ?
+### E1 — Cibles
 
-À compléter (mon hypothèse préremplie, à corriger) :
-
-| Repo | Cible de publication |
+| Dépôt | Cible |
 |---|---|
 | `rociadb-core-sdk-rust` | crates.io |
 | `rociadb-core-sdk-python` | PyPI |
-| `rociadb-core-sdk-ts` | npm |
-| `rocia-db-core`, `-backend`, `-ui`, `-admin`, `-orchestrator`, `-ticket` | image GHCR |
-| `rocia-db-theme` | ? (package npm privé ?) |
-| `example-*` | rien — CI uniquement |
+| `rociadb-core-sdk-ts` | npm public |
+| `rocia-db-theme` | **npm privé GitHub Packages** |
+| `rocia-db-*` (applicatifs) | image GHCR multi-arch |
+| `example-*` | rien |
 
-Note : le document de synthèse mentionne `cargo publish` et `pnpm publish`, mais
-oublie PyPI alors que le SDK Python existe.
+### E2 — Authentification
 
-**Réponse :**
+- PyPI → **Trusted Publishing (OIDC)**, aucun token.
+- npm public → **`--provenance` + OIDC**, aucun token.
+- npm privé GitHub Packages → `GITHUB_TOKEN` + `packages: write`.
+- crates.io → `CARGO_REGISTRY_TOKEN` en secret d'organisation.
+- GHCR → `GITHUB_TOKEN` + `packages: write`, jamais un PAT.
 
-### E2 — Authentification aux registries
+### E3 — Pas d'image sur `main`
 
-**Ma reco :**
-- **PyPI → Trusted Publishing (OIDC)** via `pypa/gh-action-pypi-publish` : aucun token stocké.
-- **npm → `--provenance` + OIDC** : aucun token stocké, et attestation de provenance vérifiable.
-- **crates.io → token** en secret d'org (le Trusted Publishing y est plus récent ; à vérifier sur le flux actuel avant de miser dessus).
-- **GHCR → `GITHUB_TOKEN` + `permissions: packages: write`**, jamais un PAT.
+Pas de préprod : on ne construit et ne pousse une image que sur release.
 
-**Réponse :**
+### E4 — Multi-arch AMD64 + ARM64 : **cross-compilation, pas QEMU**
 
-### E3 — Image Docker aussi sur `main` ?
+Besoin réel (Kubernetes multi-provider, ARM64 moins cher chez certains).
+Contrainte : `rocia2` est un runner amd64 unique.
 
-Le document ne build que sur release. Tu ne peux donc jamais tester un déploiement
-avant de publier la version.
+L'émulation QEMU coûte 10 à 20× sur une compilation Rust. La stratégie retenue est
+de **ne jamais rien exécuter pour l'architecture étrangère pendant le build
+d'image** :
 
-**Question :** y a-t-il une préprod ? Si oui, ma reco est un tag `:edge` /
-`:main-<sha>` poussé sur push `main`, en plus des tags de version au release.
+| Langage | Méthode |
+|---|---|
+| Rust | `cargo-zigbuild` vers `x86_64-` et `aarch64-unknown-linux-musl`, binaires statiques, image `distroless/static` |
+| Node | `pnpm build` une fois (sortie Nitro indépendante de l'architecture), image = `COPY` seul |
+| Python | `uv --python-platform` pour résoudre les wheels aarch64 |
 
-**Réponse :**
+**Règle qui en découle, à respecter dans les Dockerfiles : aucune instruction
+`RUN` ne doit s'exécuter pour l'architecture étrangère.** Uniquement `COPY`,
+`ENV`, `ENTRYPOINT`. C'est ce qui permet de se passer de `setup-qemu-action`.
 
-### E4 — Multi-arch ?
+Échappatoire documentée si un dépôt Python a une dépendance sans wheel aarch64 :
+runner GitHub `ubuntu-24.04-arm` (désormais disponible sur les dépôts privés et
+décompté du quota gratuit) pour la branche arm, puis fusion des manifestes.
 
-**Question :** arm64 est-il un besoin réel ?
+### E5 — Approbation manuelle avant publication publique
 
-**Ma reco :** si non → amd64 seul, et on supprime la complexité. Si oui et que
-c'est du Rust → **cross-compilation**, pas QEMU : l'émulation coûte 10 à 20× sur
-une compilation Rust, sur une VPS ça devient ingérable.
+Environment GitHub `release` avec required reviewers sur les publications
+irréversibles (crates.io, npm, PyPI).
 
-**Réponse :**
-
-### E5 — Approbation manuelle avant publication publique ?
-
-**Ma reco : oui** — un GitHub *environment* `release` avec required reviewers pour
-crates.io / npm / PyPI. Ces publications sont **irréversibles** : on ne dépublie
-pas une version, on en publie une autre.
-
-**Réponse :**
+⚠️ Limite plan Free : les règles de protection d'environnement ne sont
+disponibles **que sur les dépôts publics**. Les trois SDK publics en bénéficient ;
+`rocia-db-theme` (privé) non.
 
 ---
 
 ## F — Squash TM
 
+Rien n'existe encore côté Squash TM : le standard est défini ici.
+
 ### F1 — Convention `automated_test_reference`
 
-Il faut une convention **dérivable automatiquement** des trois frameworks, qui ne
-nomment pas les tests de la même façon (`crate::module::test_name` côté Rust,
-`tests/test_x.py::TestClass::test_y` côté pytest, `describe > it` côté vitest).
+```
+<repo>/<classname>#<test>
+```
 
-**Ma reco :** `<repo>/<chemin-normalisé>#<nom-du-test>`, avec la normalisation
-faite dans le script de publication — un seul endroit à corriger. À figer **une
-fois pour l'org**, pas repo par repo.
+Dérivable automatiquement du JUnit des trois frameworks, sans configuration par
+dépôt :
 
-**Question :** as-tu déjà des cas de test dans Squash TM avec une convention
-existante à respecter ?
+| Framework | `classname` JUnit | Exemple de référence |
+|---|---|---|
+| nextest | crate + module | `rocia-db-core/rocia_db_core::index#test_insert` |
+| pytest | module pointé | `rocia-db-admin/tests.test_auth.TestLogin#test_expired` |
+| vitest | chemin du fichier | `rocia-db-theme/src/button.test.ts#Button > renders` |
 
-**Réponse :**
+Normalisation (espaces, séparateurs) centralisée dans le script de publication —
+un seul endroit à corriger.
 
-### F2 — Itération cible
+### F2 — Itération créée par le pipeline
 
-**Question :** une itération Squash TM par release ? Créée à la main ou via l'API ?
+Une itération par version, créée via l'API au moment du release et nommée d'après
+le tag. Pas de création manuelle : ce serait une étape humaine au milieu d'un
+pipeline automatique.
 
-**Ma reco :** créée par le pipeline via API au moment du release, nommée d'après le
-tag. Si c'est manuel, tu introduis une étape humaine qui bloquera le pipeline un
-vendredi soir.
+### F3 — Les tests sont rejoués dans le job de release
 
-**Réponse :**
+Plutôt que de récupérer l'artifact JUnit du run de `main` : rétention limitée,
+et run introuvable si le workflow a été relancé.
 
-### F3 — D'où viennent les résultats au moment du release ?
+### F4 — Échec Squash TM non bloquant
 
-Le point que le document laisse ouvert : au merge de la Release PR, les tests ne
-tournent pas — ils ont tourné au push sur `main`.
+`continue-on-error: true`. Une instance Squash TM indisponible ne doit pas faire
+échouer une release.
 
-- (a) **Rejouer les tests dans le job de release.** Plus cher, mais autonome et fiable.
-- (b) Récupérer l'artifact JUnit du run de `main` correspondant au SHA. Fragile : rétention limitée, run introuvable si le workflow a été relancé.
+### F5 — Script Python maison
 
-**Ma reco : (a).**
-
-**Réponse :**
-
-### F4 — Un échec de publication Squash TM fait-il échouer le pipeline ?
-
-**Ma reco : non** (`continue-on-error: true`) au démarrage. Une instance Squash TM
-indisponible ne doit pas bloquer une release. On resserre plus tard si besoin.
-
-**Réponse :**
-
-### F5 — OpenTestFactory Orchestrator ou script maison ?
-
-**Ma reco : script Python maison.** ~150 lignes, versionné dans `ci`, testé,
-maîtrisé. OTF est un orchestrateur complet — disproportionné pour publier des
+Dans `scripts/squash_tm/`, exposé via l'action composite `squash-tm-publish`.
+OpenTestFactory est un orchestrateur complet, disproportionné pour publier des
 résultats sur une API REST.
-
-**Réponse :**
 
 ---
 
 ## G — Conventions et gouvernance
 
-### G1 — Respect des conventional commits
+### G1 — Squash-merge confirmé → c'est le **titre de PR** qui est linté
 
-Toute la chaîne release-please en dépend, et **rien ne l'impose** dans le document.
+En squash-merge, le titre de la PR devient le message de commit, donc c'est lui
+que release-please lit. `amannn/action-semantic-pull-request` en check, et merge
+commit / rebase à désactiver dans les settings de chaque dépôt.
 
-Point important : en squash-merge, c'est le **titre de la PR** qui devient le
-message de commit. C'est donc le titre qu'il faut linter, pas les commits de la
-branche.
+### G2 — Rulesets : **dépôts publics uniquement** *(révision)*
 
-**Ma reco :** `amannn/action-semantic-pull-request` en check bloquant, + désactiver
-merge commit et rebase dans les settings des repos pour que titre = message.
+Je recommandais un ruleset d'organisation pour les 14 dépôts. Le plan Free ne le
+permet pas sur les dépôts privés (voir A4). La protection est donc en place sur les
+6 dépôts publics et **inexistante sur les 8 privés** tant que le plan ne change pas.
 
-**Question : squash-merge partout, confirmé ?**
+Les noms de jobs sont malgré tout figés dès maintenant (`quality`, `release-please`,
+`publish`, `docker`, `squash-tm`) pour que les required checks soient activables
+sans retouche le jour où le plan change.
 
-**Réponse :**
+### G3 — Renovate
 
-### G2 — Branch protection par repo ou ruleset d'org ?
+`renovate.json` fourni à la racine de ce dépôt, et un preset partagé pour les
+dépôts consommateurs. C'est lui qui maintient les versions d'actions épinglées ici.
 
-**Ma reco : ruleset au niveau organisation** — un seul endroit pour 14 repos,
-au lieu de 14 configurations qui divergeront.
+### G4 — Dépôt `RociaDB/.github`
 
-Contrainte à anticiper : les required checks sont référencés **par nom de job**,
-donc les noms de jobs doivent être identiques partout → à figer dans les reusable
-workflows dès le départ.
+Retenu, mais hors périmètre de ce projet : `ci` porte l'exécutable, `.github`
+portera les conventions humaines (templates de PR, CODEOWNERS).
 
-**Réponse :**
+### G5 — Secrets au niveau organisation, liste blanche explicite
 
-### G3 — Renovate ou Dependabot ?
-
-**Ma reco : Renovate**, avec une config partagée hébergée dans `ci` (`extends`
-depuis les 14 repos), groupement des mises à jour et auto-merge des patches une
-fois la CI fiable. Dependabot n'a pas d'équivalent propre pour la config partagée.
-
-**Réponse :**
-
-### G4 — Repo `RociaDB/.github` ?
-
-Templates de PR et d'issues, CODEOWNERS par défaut, profil public de l'org.
-
-**Ma reco : oui**, il complète `ci` naturellement — `ci` porte l'exécutable,
-`.github` porte les conventions humaines.
-
-**Réponse :**
-
-### G5 — Secrets : niveau org ou repo ?
-
-**Ma reco : org-level avec liste explicite de repos autorisés** pour `SONAR_TOKEN`,
-`SONAR_HOST_URL`, `SQUASH_TM_URL` / `SQUASH_TM_TOKEN`, `CARGO_REGISTRY_TOKEN`.
-
-⚠️ Point de vigilance : un secret d'org rendu accessible aux repos **publics** est
-lisible par tout workflow de ces repos. `SONAR_HOST_URL` et `SQUASH_TM_URL`
-pointent sur des instances self-hosted — ne les expose pas aux repos publics,
-qui n'en ont de toute façon pas besoin si Sonar ne tourne que sur les privés.
-
-**Réponse :**
+⚠️ Un secret d'organisation rendu accessible aux dépôts publics est lisible par
+tout workflow de ces dépôts. `SONAR_HOST_URL` et `SQUASH_TM_URL` pointent sur des
+instances Tailscale : **ne jamais les exposer aux dépôts publics**, qui n'en ont de
+toute façon pas l'usage (A2). Détail dans [`secrets.md`](secrets.md).
 
 ---
 
 ## H — Séquencement
 
-**Ma reco :**
-
-| Phase | Contenu | Sortie |
+| Phase | Contenu | État |
 |---|---|---|
-| 0 | Réponses à ce document + GitHub App + visibilité `ci` | Décisions figées |
-| 1 | Reusable workflows Rust/Python/Node (PR + main) + les 3 `example-*` | Chemin public→public validé |
-| 2 | Les 3 SDK publics : release-please + publication registries | Premières releases automatisées |
-| 3 | Repos privés + `rocia2` + rulesets d'org | Couverture complète |
-| 4 | Squash TM (script + itérations + convention) | Traçabilité des tests |
-| 5 | Durcissement runner (éphémère, conteneurs) + Renovate | Régime de croisière |
+| 0 | Décisions | ✅ ce document |
+| 1 | Workflows réutilisables + templates + auto-test | ✅ ce dépôt |
+| 2 | `ci` passé en public + GitHub App créée + secrets d'org | ⬜ **actions manuelles, voir `onboarding.md` §0** |
+| 3 | Premier dépôt volontaire migré | ⬜ au choix |
+| 4 | Squash TM branché (instance + itérations) | ⬜ |
+| 5 | Durcissement runner + Renovate généralisé | ⬜ |
+
+---
+## Questions ouvertes
+
+Deux niveaux : **bloquantes** (un mauvais choix ici se paie en reprise sur tous les
+dépôts) et **à confirmer** (j'ai un défaut raisonnable, il suffit de le valider ou
+de le corriger).
+
+---
+
+### Bloquantes
+
+#### Q1 — Plan GitHub : rester en Free ou passer en Team ?
+
+Décision à plus fort levier du projet, et elle n'est pas technique. Le plan Team
+débloque d'un coup : branch protection et rulesets sur les dépôts privés (donc des
+required checks qui **bloquent** réellement un merge), 3 000 min/mois, 2 Go de
+packages, merge queue, protections d'environnement sur les privés.
+
+Sans ce changement, la CI des 8 dépôts privés est **informative, pas bloquante** :
+elle signale, elle n'empêche rien. Tout le discours « garde-fou avant merge » de la
+synthèse initiale ne vaut que pour les 6 dépôts publics.
+
+**Réponse :**
+
+#### Q2 — Où stocker les images privées ?
+
+500 Mo de GitHub Packages privés ne tiendront pas avec 6 dépôts × 2 architectures ×
+n versions. Options : registre auto-hébergé sur la VPS (cohérent avec Sonar et
+Squash TM déjà sur le tailnet — mais les clusters Kubernetes multi-provider
+doivent l'atteindre), plan Team (2 Go, repousse sans résoudre), ou purge
+automatique agressive.
+
+**Réponse :**
+
+#### Q3 — Quel langage pour chaque dépôt privé ?
+
+Le template couvre Rust, Node et Python. Connaître la répartition permet de
+préparer les fichiers de configuration à l'avance et de valider le bon workflow
+en premier.
+
+**Réponse :**
+
+#### Q4 — Quel périmètre de tests remonte dans Squash TM ?
+
+C'est la question qui conditionne tout le design de la partie F, et elle n'était
+posée nulle part.
+
+Squash TM est un outil de **gestion de tests** : chaque résultat importé doit
+correspondre à un **cas de test existant** portant une `automated_test_reference`.
+Or une base Rust produit vite des centaines ou des milliers de tests unitaires.
+Créer un cas de test Squash par test unitaire est ingérable, et sans correspondance
+les résultats sont rejetés silencieusement.
+
+Trois sous-questions :
+- **Périmètre** : seulement les tests fonctionnels / e2e (usage classique), ou
+  vraiment tous les tests unitaires ?
+- **Création des cas de test** : à la main par les testeurs, ou le pipeline
+  crée-t-il le cas s'il n'existe pas ?
+- **Découpage** : un projet Squash TM par dépôt, ou un projet global ?
+
+Si la réponse est « fonctionnels seulement », il faut un marqueur dans les tests
+(feature nextest, marker pytest, tag vitest) pour filtrer ce qui remonte — à
+définir dans la convention.
+
+**Réponse :**
+
+#### Q5 — Amorçage des versions existantes
+
+Piège classique de l'adoption de release-please : sur un dépôt qui a déjà des tags
+ou une version dans son manifeste, release-please repart de zéro s'il n'est pas
+amorcé (`bootstrap-sha`, `last-release-sha`, version initiale).
+
+- Les dépôts ont-ils déjà des tags de version et des releases GitHub ?
+- Les SDK sont-ils en `0.x` ou déjà `≥ 1.0` ? En `0.x`, release-please traite un
+  breaking change en bump **mineur**, pas majeur — comportement souvent inattendu.
+
+**Réponse :**
+
+#### Q6 — Des tests ont-ils besoin de services externes ?
+
+Base de données, broker, `docker-compose`, instance RociaDB de test… Sur un runner
+unique et sérialisé, cela change l'architecture des jobs (services GitHub Actions,
+conteneurs annexes, temps d'exécution) et c'est structurant.
+
+**Réponse :**
+
+#### Q7 — Teste-t-on sur ARM64, ou seulement build ?
+
+En l'état, on publierait des images ARM64 déployées en production sans jamais y
+exécuter un seul test. Pour du Rust c'est un risque réel (dépendances natives,
+alignement, comportements flottants). Options : exécuter aussi les tests sur
+`ubuntu-24.04-arm` (runner GitHub, décompté du quota), ou assumer le risque
+explicitement.
+
+**Réponse :**
+
+#### Q8 — Le pipeline s'arrête-t-il à l'image, ou déploie-t-il ?
+
+La synthèse s'arrête à la publication. Mais il y a des clusters Kubernetes
+multi-provider. Si le déploiement est en GitOps (ArgoCD, Flux), il faut
+probablement bumper un manifeste dans un dépôt d'infrastructure — ce qui **ajoute
+un dépôt au périmètre** et un secret d'écriture croisée. À cadrer maintenant :
+c'est la frontière du projet.
+
+**Réponse :**
+
+#### Q9 — Nommage et tags des images
+
+Une fois dans les manifestes Kubernetes, c'est figé.
+- Chemin : `ghcr.io/rociadb/<repo>` ou `ghcr.io/rociadb/<produit>/<composant>` ?
+- Tags produits : `1.2.3` seul, ou aussi `1.2`, `1`, `latest` ?
+- `latest` est-il souhaitable, ou interdit (bonne pratique en Kubernetes) ?
+
+**Réponse :**
+
+#### Q10 — État réel de `rocia2`
+
+Déterminant pour savoir si les workflows peuvent réutiliser les actions standard :
+- OS et architecture (amd64 présumé) ?
+- Docker installé, et le user du runner est-il dans le groupe `docker` ?
+- `rustup`, `node`, `uv`, `zig` préinstallés, ou installés à chaque exécution ?
+- Espace disque disponible, et politique de purge des caches Rust et des images ?
 
 **Réponse :**
 
 ---
 
-## Questions ouvertes restantes
+### À confirmer (un défaut existe)
 
-À remplir au fil des réponses — tout ce qui émerge et n'entre dans aucune section.
+| # | Question | Mon défaut |
+|---|---|---|
+| Q11 | Matrice de versions de langage ? | Une seule version sur les dépôts privés (runner unique) ; matrice sur les SDK publics (runners GitHub gratuits et illimités) |
+| Q12 | Les 3 SDK partagent-ils un même numéro de version ? | Non — versions indépendantes. release-please ne synchronise pas entre dépôts |
+| Q13 | Branche principale `main` partout ? | Oui |
+| Q14 | Renovate : auto-merge des patches ? | Titres conventional oui ; auto-merge non tant que la CI n'est pas éprouvée |
+| Q15 | CodeQL + secret scanning + push protection sur les dépôts publics ? | Oui — gratuit, et à activer dès maintenant |
+| Q16 | Signature d'images (cosign), SBOM, attestation de provenance ? | Provenance buildx oui (gratuite) ; cosign et SBOM en phase 5 |
+| Q17 | Politique d'images de base ? | `distroless/static` (Rust), `node:22-alpine` (Node), `python:3.13-slim` (Python), non-root, labels OCI |
+| Q18 | Où notifier les échecs de CI ? | Rien de plus que les notifications GitHub natives |
+| Q19 | Les dépôts publics ont-ils une licence ? | Requis par crates.io et npm — à vérifier dépôt par dépôt |
+| Q20 | Publier la documentation (rustdoc / typedoc / mkdocs) ? | Hors périmètre pour l'instant |
+| Q21 | Noms de jobs figés : `quality`, `release-please`, `publish`, `docker`, `squash-tm` ? | Oui — ils deviennent les noms des required checks, donc difficiles à renommer ensuite |
+| Q22 | Préfixe des tags git ? | `v1.2.3` |
 
--
+**Réponses :**
