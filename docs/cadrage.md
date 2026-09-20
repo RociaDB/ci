@@ -69,7 +69,7 @@ réellement contraignant plutôt qu'informatif.
 
 ### B1 — Granularité : un workflow réutilisable par (langage × phase)
 
-`_rust-pr.yml`, `_rust-main.yml`, et l'équivalent Node et Python, plus
+`_rust-quality.yml`, `_rust-main.yml`, et l'équivalent Node et Python, plus
 `_pr-title.yml` partagé. Sept fichiers.
 
 **Correction par rapport à la synthèse initiale :** il n'y a **pas trois
@@ -90,7 +90,7 @@ types, tests) sont donc des **étapes** d'un job `quality` unique, chaînées en
 
 ### B2 — Épinglage : `@v1` flottant
 
-Les dépôts consommateurs appellent `RociaDB/ci/.github/workflows/_rust-pr.yml@v1`.
+Les dépôts consommateurs appellent `RociaDB/ci/.github/workflows/_rust-quality.yml@v1`.
 Le tag `v1` est déplacé à chaque release de `ci`.
 
 Note de maintenance : les actions composites internes sont référencées en dur en
@@ -377,12 +377,18 @@ Le script de publication **listera explicitement les références non appariées
 fin d'exécution, plutôt que de les perdre en silence : c'est ce qui rendra visible
 l'écart entre les tests réels et le référentiel.
 
-#### Conséquence de Q10 — deux purges nécessaires
+#### Conséquence de Q10 — entretien du disque
 
 Moins de 50 Go sur `rocia2`, avec des caches cargo et des couches Docker qui
-grossissent à chaque exécution. Deux jobs planifiés distincts :
-- **sur le runner** — `cargo cache`, `docker system prune`, artefacts de build ;
-- **sur GHCR** — versions non taguées et anciennes versions (Q2).
+grossissent à chaque exécution. `maintenance-runner.yml` s'en charge chaque
+dimanche.
+
+Côté GHCR, la purge n'est **pas** un job planifié central : l'endpoint
+d'énumération des packages d'une organisation refuse les jetons d'App
+(HTTP 400 sur `package_type=container`). Elle est donc intégrée au job `docker`,
+juste après le push, avec le `GITHUB_TOKEN` du dépôt sur son propre package —
+ce qui la fait tourner exactement quand le stockage grossit, sans secret
+supplémentaire.
 
 Tout l'outillage étant préinstallé, les actions de setup servent uniquement de
 garde-fou de version — elles ne réinstallent rien en pratique.

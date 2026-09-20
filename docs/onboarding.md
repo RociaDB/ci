@@ -32,24 +32,66 @@ d'hôte en dur dans ce dépôt.
 
 ### 0.3 Créer la GitHub App de release
 
-`Settings` de l'organisation → `Developer settings` → `GitHub Apps` → `New`.
-
-Permissions de dépôt à accorder :
-
-| Permission | Niveau | Pourquoi |
-|---|---|---|
-| Contents | Read and write | release-please crée les tags et les commits de release |
-| Pull requests | Read and write | Maintien de la Release PR perpétuelle |
-| Issues | Read and write | release-please gère ses propres labels |
-| Packages | Read and write | Purge GHCR inter-dépôts (`maintenance-ghcr.yml`) |
-| Metadata | Read | Obligatoire |
-
-Installer l'App sur l'organisation, sur tous les dépôts. Générer une clé privée.
-
 > **Pourquoi une App et pas le `GITHUB_TOKEN`.** Une PR ouverte avec le
 > `GITHUB_TOKEN` par défaut ne déclenche aucun workflow — GitHub l'empêche pour
 > éviter les boucles. La Release PR n'aurait donc jamais de check, et resterait
 > non mergeable pour toujours dès que les required checks sont actifs.
+
+#### a. Créer l'App
+
+`https://github.com/organizations/RociaDB/settings/apps` → **New GitHub App**
+
+| Champ | Valeur |
+|---|---|
+| **GitHub App name** | `RociaDB Release Bot` — le nom est unique sur tout GitHub, ajouter un suffixe s'il est pris |
+| **Homepage URL** | `https://github.com/RociaDB/ci` — obligatoire, le contenu n'importe pas |
+| **Callback URL** | vide |
+| **Setup URL** | vide |
+| **Webhook → Active** | ⚠️ **décocher.** Coché par défaut, il exige alors une URL de webhook dont on n'a aucun usage |
+| **Where can this GitHub App be installed?** | *Only on this account* |
+
+**Repository permissions** — tout le reste sur *No access* :
+
+| Permission | Niveau | Pourquoi |
+|---|---|---|
+| Contents | Read and write | Créer les tags et les commits de release |
+| Issues | Read and write | release-please gère ses propres labels |
+| Metadata | Read-only | Imposé, se coche automatiquement |
+| Pull requests | Read and write | Maintenir la Release PR perpétuelle |
+
+Aucune *Organization permission* n'est nécessaire.
+
+> La permission **Packages** n'est plus requise. Elle l'était pour une purge
+> GHCR centralisée, abandonnée : l'endpoint d'énumération des packages d'une
+> organisation refuse les jetons d'App (HTTP 400 sur `package_type=container`).
+> La purge se fait désormais dans le job `docker`, avec le `GITHUB_TOKEN` du
+> dépôt. Si elle a déjà été accordée, elle peut rester sans inconvénient.
+
+→ **Create GitHub App**
+
+#### b. Récupérer les identifiants
+
+1. **App ID**, en haut de la page de l'App — un nombre court, par exemple
+   `1234567`. ⚠️ Ce n'est **pas** le Client ID, qui ressemble à `Iv23li...`.
+2. Section **Private keys** → **Generate a private key**. Un fichier `.pem` se
+   télécharge, et il n'est affiché qu'une seule fois.
+
+#### c. Installer l'App
+
+Créer une App ne suffit pas : il faut l'**installer**. C'est l'oubli le plus
+fréquent, et il ne produit aucun message d'erreur explicite.
+
+Menu latéral → **Install App** → ligne `RociaDB` → **Install** →
+**All repositories**.
+
+#### d. Vérifier
+
+Une fois les secrets créés (§0.4), dans `RociaDB/ci` : onglet **Actions** →
+workflow **selftest · jeton d'App** → **Run workflow**.
+
+Il obtient un jeton d'App et liste les dépôts couverts par l'installation. Vert,
+les trois éléments sont bons ; rouge, le message dit lequel manque. Trente
+secondes, au lieu de le découvrir à l'étape §4.
 
 ### 0.4 Créer les secrets et variables d'organisation
 

@@ -32,6 +32,10 @@ on:
         description: 'Construire et pousser une image multi-arch sur GHCR au moment du release.'
         type: boolean
         default: false
+      image_retention:
+        description: "Nombre de versions d'image taguées à conserver sur GHCR."
+        type: string
+        default: '10'
       squash_tm:
         type: boolean
         default: false
@@ -190,6 +194,27 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # La purge vit ici plutôt que dans un job planifié central : l'endpoint
+      # d'énumération des packages d'une organisation refuse les jetons d'App
+      # (HTTP 400 sur package_type=container). Le GITHUB_TOKEN du dépôt, lui,
+      # suffit pour son propre package — et c'est ici que le stockage grossit.
+      - name: purge des versions non taguées
+        uses: actions/delete-package-versions@v5
+        continue-on-error: true
+        with:
+          package-name: ${{ github.event.repository.name }}
+          package-type: container
+          delete-only-untagged-versions: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: rétention des versions taguées
+        uses: actions/delete-package-versions@v5
+        continue-on-error: true
+        with:
+          package-name: ${{ github.event.repository.name }}
+          package-type: container
+          min-versions-to-keep: ${{ inputs.image_retention }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
   squash-tm:
     if: ${{ needs.release-please.outputs.release_created == 'true' && inputs.squash_tm }}

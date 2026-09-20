@@ -15,8 +15,8 @@ runners GitHub qui ne sont pas sur le tailnet.
 
 | Secret | Portée | Utilisé par |
 |---|---|---|
-| `RELEASE_APP_ID` | Tous les dépôts | release-please, purge GHCR |
-| `RELEASE_APP_PRIVATE_KEY` | Tous les dépôts | release-please, purge GHCR |
+| `RELEASE_APP_ID` | Tous les dépôts | release-please |
+| `RELEASE_APP_PRIVATE_KEY` | Tous les dépôts | release-please |
 | `SONAR_TOKEN` | **Dépôts privés uniquement** | Job `sonar` |
 | `SONAR_HOST_URL` | **Dépôts privés uniquement** | Job `sonar` |
 | `SQUASH_TM_URL` | **Dépôts privés uniquement** | Job `squash-tm` |

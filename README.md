@@ -37,7 +37,7 @@ jobs:
   _node-*.yml          idem pour Node et TypeScript (package npm ou Nuxt SSR)
   _python-*.yml        idem pour Python (gestionnaire uv)
   _pr-title.yml        lint du titre de PR — squash-merge oblige
-  maintenance-*.yml    purges planifiées du runner et de GHCR
+  maintenance-runner.yml  purge hebdomadaire du disque de rocia2
 actions/
   squash-tm-publish/   action composite enveloppant le script de publication
 scripts/squash_tm/     lecture JUnit, normalisation des références, publication
