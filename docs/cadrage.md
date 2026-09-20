@@ -50,18 +50,18 @@ App, la Release PR n'aurait jamais de check et resterait non mergeable.
 Secrets d'organisation attendus : `RELEASE_APP_ID`, `RELEASE_APP_PRIVATE_KEY`.
 Voir [`secrets.md`](secrets.md).
 
-### A4 — Plan GitHub : **Free** — limites à assumer *(question ouverte)*
+### A4 — Plan GitHub : **Team**
 
-Le plan Free contraint le projet plus que l'outillage. Trois limites à connaître :
+Décision prise : passage de Free à GitHub Team. C'est ce qui rend le projet
+réellement contraignant plutôt qu'informatif.
 
-| Limite | Effet |
+| Débloqué par Team | Effet |
 |---|---|
-| **Pas de branch protection ni de rulesets sur les dépôts privés** | Les required status checks sont **impossibles** sur les 8 dépôts privés. La CI tourne et signale, mais rien n'empêche de merger une PR rouge. |
-| 2 000 minutes/mois de runners GitHub sur les dépôts privés | C'est la raison d'être de `rocia2`. Les dépôts publics restent illimités et gratuits. |
-| GitHub Packages privés : 500 Mo de stockage, 1 Go de transfert/mois | Très serré pour 6 dépôts × images multi-arch × plusieurs versions. Saturation en quelques semaines. |
-
-Le « garde-fou avant merge » de la synthèse initiale ne s'applique donc **qu'aux
-dépôts publics** en l'état. Voir la question ouverte **Q1**.
+| Branch protection et rulesets sur les dépôts privés | Les required status checks **bloquent** un merge sur les 14 dépôts, plus seulement sur les 6 publics |
+| 3 000 min/mois de runners GitHub | Marge pour la matrice des SDK publics et un éventuel runner ARM64 |
+| 2 Go de packages, 10 Go de transfert/mois | Viable pour GHCR avec purge automatique (Q2) |
+| Merge queue | Disponible, non activée (C4) |
+| Protections d'environnement sur les privés | L'approbation manuelle avant publication (E5) s'applique aussi à `rocia-db-theme` |
 
 ---
 
@@ -309,15 +309,14 @@ En squash-merge, le titre de la PR devient le message de commit, donc c'est lui
 que release-please lit. `amannn/action-semantic-pull-request` en check, et merge
 commit / rebase à désactiver dans les settings de chaque dépôt.
 
-### G2 — Rulesets : **dépôts publics uniquement** *(révision)*
+### G2 — Ruleset d'organisation sur les 14 dépôts
 
-Je recommandais un ruleset d'organisation pour les 14 dépôts. Le plan Free ne le
-permet pas sur les dépôts privés (voir A4). La protection est donc en place sur les
-6 dépôts publics et **inexistante sur les 8 privés** tant que le plan ne change pas.
+Le plan Team (A4) lève la restriction : un ruleset unique au niveau organisation
+couvre les dépôts publics **et** privés, au lieu de 14 configurations qui
+divergeraient.
 
-Les noms de jobs sont malgré tout figés dès maintenant (`quality`, `release-please`,
-`publish`, `docker`, `squash-tm`) pour que les required checks soient activables
-sans retouche le jour où le plan change.
+Les required checks sont référencés par nom de job, donc les noms sont figés dès
+maintenant : `quality`, `release-please`, `publish`, `docker`, `squash-tm`.
 
 ### G3 — Renovate
 
@@ -350,147 +349,75 @@ toute façon pas l'usage (A2). Détail dans [`secrets.md`](secrets.md).
 | 5 | Durcissement runner + Renovate généralisé | ⬜ |
 
 ---
-## Questions ouvertes
+## Réponses aux questions en suspens
 
-Deux niveaux : **bloquantes** (un mauvais choix ici se paie en reprise sur tous les
-dépôts) et **à confirmer** (j'ai un défaut raisonnable, il suffit de le valider ou
-de le corriger).
-
----
+Série tranchée le 2026-09-20. Toutes les questions ouvertes sont closes.
 
 ### Bloquantes
 
-#### Q1 — Plan GitHub : rester en Free ou passer en Team ?
+| # | Question | Décision |
+|---|---|---|
+| Q1 | Plan GitHub | **Passage en Team.** Voir A4 — required checks réellement bloquants sur les 14 dépôts |
+| Q2 | Registre des images privées | **GHCR + purge automatique.** Job planifié : suppression des versions non taguées, rétention des N dernières |
+| Q3 | Langages des dépôts privés | **Les trois** — Rust, Node/TypeScript et Python sont présents |
+| Q4 | Périmètre Squash TM | **Tous les tests, unitaires inclus.** Cas de test créés par les testeurs, pas par le pipeline |
+| Q5 | Amorçage des versions | **Aucun tag existant** — release-please démarre à `0.1.0`, rien à amorcer |
+| Q5b | Semver | **`0.x`** partout. Attention : en `0.x`, un breaking change produit un bump **mineur** |
+| Q6 | Services externes pour les tests | **Aucun** — tous les tests sont autonomes |
+| Q7 | Tests ARM64 | **Build ARM64, tests sur amd64 uniquement.** Risque assumé et documenté |
+| Q8 | Frontière du pipeline | **S'arrête à la publication de l'image.** Pas de GitOps, pas d'accès cluster depuis la CI |
+| Q9 | Tags d'images | **`1.2.3` + `1.2` + `1`, sans `latest`.** Chemin : `ghcr.io/rociadb/<nom-du-dépôt>` |
+| Q10 | État de `rocia2` | **amd64**, Docker + buildx, rustup, node + pnpm et uv **déjà installés**. **Disque < 50 Go** |
 
-Décision à plus fort levier du projet, et elle n'est pas technique. Le plan Team
-débloque d'un coup : branch protection et rulesets sur les dépôts privés (donc des
-required checks qui **bloquent** réellement un merge), 3 000 min/mois, 2 Go de
-packages, merge queue, protections d'environnement sur les privés.
+#### Conséquence de Q4 — dette de référentiel à surveiller
 
-Sans ce changement, la CI des 8 dépôts privés est **informative, pas bloquante** :
-elle signale, elle n'empêche rien. Tout le discours « garde-fou avant merge » de la
-synthèse initiale ne vaut que pour les 6 dépôts publics.
+Remonter tous les tests unitaires impose qu'un cas de test existe dans Squash TM
+pour chaque référence produite. Les résultats sans cas correspondant sont rejetés.
+Le script de publication **listera explicitement les références non appariées** en
+fin d'exécution, plutôt que de les perdre en silence : c'est ce qui rendra visible
+l'écart entre les tests réels et le référentiel.
 
-**Réponse :**
+#### Conséquence de Q10 — deux purges nécessaires
 
-#### Q2 — Où stocker les images privées ?
+Moins de 50 Go sur `rocia2`, avec des caches cargo et des couches Docker qui
+grossissent à chaque exécution. Deux jobs planifiés distincts :
+- **sur le runner** — `cargo cache`, `docker system prune`, artefacts de build ;
+- **sur GHCR** — versions non taguées et anciennes versions (Q2).
 
-500 Mo de GitHub Packages privés ne tiendront pas avec 6 dépôts × 2 architectures ×
-n versions. Options : registre auto-hébergé sur la VPS (cohérent avec Sonar et
-Squash TM déjà sur le tailnet — mais les clusters Kubernetes multi-provider
-doivent l'atteindre), plan Team (2 Go, repousse sans résoudre), ou purge
-automatique agressive.
+Tout l'outillage étant préinstallé, les actions de setup servent uniquement de
+garde-fou de version — elles ne réinstallent rien en pratique.
 
-**Réponse :**
+### Confirmées
 
-#### Q3 — Quel langage pour chaque dépôt privé ?
-
-Le template couvre Rust, Node et Python. Connaître la répartition permet de
-préparer les fichiers de configuration à l'avance et de valider le bon workflow
-en premier.
-
-**Réponse :**
-
-#### Q4 — Quel périmètre de tests remonte dans Squash TM ?
-
-C'est la question qui conditionne tout le design de la partie F, et elle n'était
-posée nulle part.
-
-Squash TM est un outil de **gestion de tests** : chaque résultat importé doit
-correspondre à un **cas de test existant** portant une `automated_test_reference`.
-Or une base Rust produit vite des centaines ou des milliers de tests unitaires.
-Créer un cas de test Squash par test unitaire est ingérable, et sans correspondance
-les résultats sont rejetés silencieusement.
-
-Trois sous-questions :
-- **Périmètre** : seulement les tests fonctionnels / e2e (usage classique), ou
-  vraiment tous les tests unitaires ?
-- **Création des cas de test** : à la main par les testeurs, ou le pipeline
-  crée-t-il le cas s'il n'existe pas ?
-- **Découpage** : un projet Squash TM par dépôt, ou un projet global ?
-
-Si la réponse est « fonctionnels seulement », il faut un marqueur dans les tests
-(feature nextest, marker pytest, tag vitest) pour filtrer ce qui remonte — à
-définir dans la convention.
-
-**Réponse :**
-
-#### Q5 — Amorçage des versions existantes
-
-Piège classique de l'adoption de release-please : sur un dépôt qui a déjà des tags
-ou une version dans son manifeste, release-please repart de zéro s'il n'est pas
-amorcé (`bootstrap-sha`, `last-release-sha`, version initiale).
-
-- Les dépôts ont-ils déjà des tags de version et des releases GitHub ?
-- Les SDK sont-ils en `0.x` ou déjà `≥ 1.0` ? En `0.x`, release-please traite un
-  breaking change en bump **mineur**, pas majeur — comportement souvent inattendu.
-
-**Réponse :**
-
-#### Q6 — Des tests ont-ils besoin de services externes ?
-
-Base de données, broker, `docker-compose`, instance RociaDB de test… Sur un runner
-unique et sérialisé, cela change l'architecture des jobs (services GitHub Actions,
-conteneurs annexes, temps d'exécution) et c'est structurant.
-
-**Réponse :**
-
-#### Q7 — Teste-t-on sur ARM64, ou seulement build ?
-
-En l'état, on publierait des images ARM64 déployées en production sans jamais y
-exécuter un seul test. Pour du Rust c'est un risque réel (dépendances natives,
-alignement, comportements flottants). Options : exécuter aussi les tests sur
-`ubuntu-24.04-arm` (runner GitHub, décompté du quota), ou assumer le risque
-explicitement.
-
-**Réponse :**
-
-#### Q8 — Le pipeline s'arrête-t-il à l'image, ou déploie-t-il ?
-
-La synthèse s'arrête à la publication. Mais il y a des clusters Kubernetes
-multi-provider. Si le déploiement est en GitOps (ArgoCD, Flux), il faut
-probablement bumper un manifeste dans un dépôt d'infrastructure — ce qui **ajoute
-un dépôt au périmètre** et un secret d'écriture croisée. À cadrer maintenant :
-c'est la frontière du projet.
-
-**Réponse :**
-
-#### Q9 — Nommage et tags des images
-
-Une fois dans les manifestes Kubernetes, c'est figé.
-- Chemin : `ghcr.io/rociadb/<repo>` ou `ghcr.io/rociadb/<produit>/<composant>` ?
-- Tags produits : `1.2.3` seul, ou aussi `1.2`, `1`, `latest` ?
-- `latest` est-il souhaitable, ou interdit (bonne pratique en Kubernetes) ?
-
-**Réponse :**
-
-#### Q10 — État réel de `rocia2`
-
-Déterminant pour savoir si les workflows peuvent réutiliser les actions standard :
-- OS et architecture (amd64 présumé) ?
-- Docker installé, et le user du runner est-il dans le groupe `docker` ?
-- `rustup`, `node`, `uv`, `zig` préinstallés, ou installés à chaque exécution ?
-- Espace disque disponible, et politique de purge des caches Rust et des images ?
-
-**Réponse :**
+| # | Question | Décision |
+|---|---|---|
+| Q11 | Matrice de versions | Sur les **SDK publics uniquement** (runners GitHub gratuits) ; version unique sur les privés |
+| Q12 | Version commune aux 3 SDK | Non — versions indépendantes |
+| Q13 | Branche principale | `main` partout |
+| Q14 | Mises à jour de dépendances | **Renovate**, config partagée hébergée ici, **sans auto-merge** |
+| Q15 | CodeQL | Activé sur les **6 dépôts publics** (gratuit ; payant sur les privés via Advanced Security) |
+| Q15b | Secret scanning + push protection | Activé sur les **6 dépôts publics** |
+| Q16 | Provenance / signature | **Attestation de provenance buildx** oui. Cosign et SBOM reportés en phase 5 |
+| Q17 | Images de base | `distroless/static` (Rust, binaire musl statique), `node:22-alpine`, `python:3.13-slim`. Non-root, labels OCI |
+| Q18 | Notifications d'échec | Notifications GitHub natives uniquement |
+| Q19 | Licences des dépôts publics | À vérifier dépôt par dépôt — exigé par crates.io et npm. Étape de la checklist d'onboarding |
+| Q20 | Publication de la documentation | Hors périmètre |
+| Q21 | Noms de jobs | Figés : `quality`, `release-please`, `publish`, `docker`, `squash-tm` |
+| Q22 | Préfixe des tags git | `v1.2.3` |
 
 ---
 
-### À confirmer (un défaut existe)
+## Ce qu'il reste à faire hors de ce dépôt
 
-| # | Question | Mon défaut |
-|---|---|---|
-| Q11 | Matrice de versions de langage ? | Une seule version sur les dépôts privés (runner unique) ; matrice sur les SDK publics (runners GitHub gratuits et illimités) |
-| Q12 | Les 3 SDK partagent-ils un même numéro de version ? | Non — versions indépendantes. release-please ne synchronise pas entre dépôts |
-| Q13 | Branche principale `main` partout ? | Oui |
-| Q14 | Renovate : auto-merge des patches ? | Titres conventional oui ; auto-merge non tant que la CI n'est pas éprouvée |
-| Q15 | CodeQL + secret scanning + push protection sur les dépôts publics ? | Oui — gratuit, et à activer dès maintenant |
-| Q16 | Signature d'images (cosign), SBOM, attestation de provenance ? | Provenance buildx oui (gratuite) ; cosign et SBOM en phase 5 |
-| Q17 | Politique d'images de base ? | `distroless/static` (Rust), `node:22-alpine` (Node), `python:3.13-slim` (Python), non-root, labels OCI |
-| Q18 | Où notifier les échecs de CI ? | Rien de plus que les notifications GitHub natives |
-| Q19 | Les dépôts publics ont-ils une licence ? | Requis par crates.io et npm — à vérifier dépôt par dépôt |
-| Q20 | Publier la documentation (rustdoc / typedoc / mkdocs) ? | Hors périmètre pour l'instant |
-| Q21 | Noms de jobs figés : `quality`, `release-please`, `publish`, `docker`, `squash-tm` ? | Oui — ils deviennent les noms des required checks, donc difficiles à renommer ensuite |
-| Q22 | Préfixe des tags git ? | `v1.2.3` |
+Aucune de ces actions n'est automatisable depuis ici sans risque. Elles sont
+détaillées dans [`onboarding.md`](onboarding.md).
 
-**Réponses :**
+1. Passer l'organisation en plan **Team**.
+2. Passer **`RociaDB/ci` en public** — sans quoi les 6 dépôts publics ne peuvent
+   pas consommer ces workflows.
+3. Créer la **GitHub App** de release et installer ses secrets d'organisation.
+4. Créer les **secrets et variables d'organisation** (voir `secrets.md`), en
+   veillant à ne **pas** exposer les URL Tailscale aux dépôts publics.
+5. Déployer l'instance **SonarQube** et l'instance **Squash TM**.
+6. Créer le **ruleset d'organisation** une fois le premier dépôt migré et ses
+   noms de checks constatés.
