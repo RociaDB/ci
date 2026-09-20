@@ -24,6 +24,9 @@ jobs:
       runs_on: ubuntu-latest
       # SDK publics uniquement : les runners GitHub y sont gratuits et illimités.
       compat_versions: '[]'
+      # protoc: true                       # si un build.rs compile des .proto
+      # postgres: postgres:18-alpine       # si les tests ont besoin d'une base
+      # postgres_initdb_args: '--locale-provider=icu --icu-locale=fr-FR --encoding=UTF8'
 
   main:
     if: github.event_name == 'push'
@@ -32,6 +35,8 @@ jobs:
     with:
       runs_on: ubuntu-latest
       sonar: false           # true sur un dépôt privé : l'instance est sur le tailnet
+      # protoc, postgres, postgres_initdb_args : mêmes valeurs que sur le job pr
+      binary_name: ''        # si le binaire ne porte pas le nom du dépôt
       publish_crate: false   # true pour rociadb-core-sdk-rust
       docker: false          # true pour un applicatif livré en image
       squash_tm: false       # true une fois l'instance Squash TM en place

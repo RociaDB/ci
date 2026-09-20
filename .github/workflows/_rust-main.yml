@@ -17,6 +17,22 @@ on:
         description: 'Exécuter cargo-deny dans le gate de qualité.'
         type: boolean
         default: true
+      protoc:
+        description: "Installer protoc. Nécessaire dès qu'un build.rs compile des .proto (tonic)."
+        type: boolean
+        default: false
+      postgres:
+        description: "Image PostgreSQL à démarrer pour les tests. Vide : aucune base."
+        type: string
+        default: ''
+      postgres_initdb_args:
+        description: "POSTGRES_INITDB_ARGS de la base de test — locale, encodage."
+        type: string
+        default: ''
+      gates_script:
+        description: "Contrôles propres au dépôt, exécutés si le fichier existe."
+        type: string
+        default: scripts/ci-gates.sh
       sonar:
         description: "Analyser avec SonarQube. Nécessite un runner sur le tailnet — donc dépôts privés uniquement."
         type: boolean
@@ -70,6 +86,10 @@ jobs:
     with:
       runs_on: ${{ inputs.runs_on }}
       audit: ${{ inputs.audit }}
+      protoc: ${{ inputs.protoc }}
+      postgres: ${{ inputs.postgres }}
+      postgres_initdb_args: ${{ inputs.postgres_initdb_args }}
+      gates_script: ${{ inputs.gates_script }}
 
   sonar:
     if: ${{ inputs.sonar }}
@@ -155,6 +175,10 @@ jobs:
         with:
           targets: x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
+      - uses: arduino/setup-protoc@v3
+        if: ${{ inputs.protoc }}
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: mlugg/setup-zig@v2
       - uses: taiki-e/install-action@v2
         with:
@@ -224,26 +248,18 @@ jobs:
 
   squash-tm:
     if: ${{ needs.release-please.outputs.release_created == 'true' && inputs.squash_tm }}
-    needs: release-please
+    needs: [quality, release-please]
     runs-on: ${{ inputs.runs_on }}
     continue-on-error: true  # une instance Squash TM indisponible ne casse pas une release
     permissions:
       contents: read
-    env:
-      NEXTEST_PROFILE: ci
     steps:
-      - uses: actions/checkout@v4
+      # Le job quality de cette même exécution a testé exactement le commit que
+      # release-please vient de taguer : son rapport JUnit fait foi, le rejouer
+      # ne prouverait rien de plus et coûterait toute la mise en place.
+      - uses: actions/download-artifact@v4
         with:
-          ref: ${{ needs.release-please.outputs.tag_name }}
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest
-      # Rejoué sur le tag plutôt que récupéré depuis l'exécution de main :
-      # la rétention des artefacts est limitée et le run peut avoir été relancé.
-      - run: cargo nextest run --all-features
-        continue-on-error: true
+          name: test-results
       - uses: RociaDB/ci/actions/squash-tm-publish@v1
         with:
           report: target/nextest/ci/junit.xml

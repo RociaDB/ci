@@ -17,17 +17,37 @@ on:
         description: 'Exécuter cargo-deny. Non bloquant pendant la stabilisation.'
         type: boolean
         default: true
+      protoc:
+        description: "Installer protoc. Nécessaire dès qu'un build.rs compile des .proto (tonic)."
+        type: boolean
+        default: false
+      postgres:
+        description: >
+          Image PostgreSQL à démarrer pour les tests, ex. postgres:18-alpine.
+          Vide : aucune base. Expose DATABASE_URL aux tests.
+        type: string
+        default: ''
+      postgres_initdb_args:
+        description: "POSTGRES_INITDB_ARGS de la base de test — locale, encodage."
+        type: string
+        default: ''
+      gates_script:
+        description: "Contrôles propres au dépôt, exécutés si le fichier existe et est exécutable."
+        type: string
+        default: scripts/ci-gates.sh
 
 permissions: {}
 
 jobs:
-  # Nom figé : il sert de required status check dans le ruleset d'organisation.
   quality:
     runs-on: ${{ inputs.runs_on }}
     permissions:
       contents: read
     env:
       NEXTEST_PROFILE: ci
+      # Les macros sqlx interrogeraient sinon la base au moment de compiler,
+      # alors que le dépôt versionne déjà ses descripteurs dans .sqlx.
+      SQLX_OFFLINE: 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -39,6 +59,37 @@ jobs:
         with:
           tool: cargo-nextest,cargo-llvm-cov,cargo-deny
 
+      # protoc est la seule dépendance de la chaîne Rust que cargo n'installe
+      # pas : sans elle, un crate qui engendre du code gRPC ne compile pas.
+      - uses: arduino/setup-protoc@v3
+        if: ${{ inputs.protoc }}
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Un serveur unique pour toute la suite, plutôt qu'un conteneur par
+      # binaire ou par test : sur un runner persistant au disque contraint,
+      # c'est la différence entre un conteneur et plusieurs centaines.
+      - name: PostgreSQL de test
+        if: ${{ inputs.postgres != '' }}
+        env:
+          IMAGE: ${{ inputs.postgres }}
+          INITDB_ARGS: ${{ inputs.postgres_initdb_args }}
+        run: |
+          set -euo pipefail
+          docker run --detach --name ci-postgres \
+            --env POSTGRES_USER=ci \
+            --env POSTGRES_PASSWORD=ci \
+            --env POSTGRES_DB=ci \
+            --env POSTGRES_INITDB_ARGS="$INITDB_ARGS" \
+            --publish 127.0.0.1:5432:5432 \
+            "$IMAGE"
+          for _ in $(seq 60); do
+            docker exec ci-postgres pg_isready -U ci -d ci >/dev/null 2>&1 && break
+            sleep 1
+          done
+          docker exec ci-postgres pg_isready -U ci -d ci
+          echo "DATABASE_URL=postgres://ci:ci@127.0.0.1:5432/ci" >> "$GITHUB_ENV"
+
       # Chaînés en !cancelled() : un échec de format n'empêche pas de voir
       # les erreurs de clippy et de tests dans la même exécution.
       - name: format
@@ -48,7 +99,21 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: tests + couverture
         if: ${{ !cancelled() }}
-        run: cargo llvm-cov nextest --all-features --lcov --output-path coverage.lcov
+        run: cargo llvm-cov nextest --workspace --all-features --lcov --output-path coverage.lcov
+
+      # Point d'extension : les critères d'arrêt propres au dépôt restent dans
+      # le dépôt, le workflow ne fait que les appeler.
+      - name: contrôles du dépôt
+        if: ${{ !cancelled() }}
+        env:
+          GATES: ${{ inputs.gates_script }}
+        run: |
+          set -euo pipefail
+          if [ -x "$GATES" ]; then
+            "$GATES"
+          else
+            echo "aucun script de contrôles à $GATES"
+          fi
 
       - name: audit des dépendances
         if: ${{ !cancelled() && inputs.audit }}
@@ -67,8 +132,11 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # Versions supplémentaires : tests seuls, sans lint ni format (déjà couverts
-  # par quality). Job séparé pour que le nom du check requis reste stable.
+      # Sur un runner persistant, un conteneur oublié survit à l'exécution.
+      - name: ramassage
+        if: ${{ always() && inputs.postgres != '' }}
+        run: docker rm --force ci-postgres || true
+
   compat:
     if: ${{ inputs.compat_versions != '[]' }}
     runs-on: ${{ inputs.runs_on }}
@@ -86,7 +154,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.toolchain }}
+      - uses: arduino/setup-protoc@v3
+        if: ${{ inputs.protoc }}
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
-      - run: cargo nextest run --all-features
+      - run: cargo nextest run --workspace --all-features
+        env:
+          SQLX_OFFLINE: 'true'

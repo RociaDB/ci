@@ -207,21 +207,18 @@ jobs:
 
   squash-tm:
     if: ${{ needs.release-please.outputs.release_created == 'true' && inputs.squash_tm }}
-    needs: release-please
+    needs: [quality, release-please]
     runs-on: ${{ inputs.runs_on }}
-    continue-on-error: true
+    continue-on-error: true  # une instance Squash TM indisponible ne casse pas une release
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      # Le job quality de cette même exécution a testé exactement le commit que
+      # release-please vient de taguer : son rapport JUnit fait foi, le rejouer
+      # ne prouverait rien de plus et coûterait toute la mise en place.
+      - uses: actions/download-artifact@v4
         with:
-          ref: ${{ needs.release-please.outputs.tag_name }}
-      - uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-      - run: uv sync --all-extras --dev
-      - run: uv run pytest --junitxml=junit.xml
-        continue-on-error: true
+          name: test-results
       - uses: RociaDB/ci/actions/squash-tm-publish@v1
         with:
           report: junit.xml

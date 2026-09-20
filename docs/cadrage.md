@@ -283,10 +283,14 @@ Une itération par version, créée via l'API au moment du release et nommée d'
 le tag. Pas de création manuelle : ce serait une étape humaine au milieu d'un
 pipeline automatique.
 
-### F3 — Les tests sont rejoués dans le job de release
+### F3 — Les résultats viennent du job `quality` de la même exécution *(révision)*
 
-Plutôt que de récupérer l'artifact JUnit du run de `main` : rétention limitée,
-et run introuvable si le workflow a été relancé.
+Je prévoyais de rejouer les tests dans le job de release, par crainte qu'un
+artefact soit introuvable. C'était mal poser le problème : `quality` et
+`squash-tm` tournent dans **la même exécution**, sur le commit que
+release-please vient de taguer. L'artefact JUnit est donc disponible et fait
+foi — rien à re-prouver, et sur un dépôt qui demande protoc et une base de
+données, le rejeu coûterait toute la mise en place une seconde fois.
 
 ### F4 — Échec Squash TM non bloquant
 
@@ -363,11 +367,31 @@ Série tranchée le 2026-09-20. Toutes les questions ouvertes sont closes.
 | Q4 | Périmètre Squash TM | **Tous les tests, unitaires inclus.** Cas de test créés par les testeurs, pas par le pipeline |
 | Q5 | Amorçage des versions | **Aucun tag existant** — release-please démarre à `0.1.0`, rien à amorcer |
 | Q5b | Semver | **`0.x`** partout. Attention : en `0.x`, un breaking change produit un bump **mineur** |
-| Q6 | Services externes pour les tests | **Aucun** — tous les tests sont autonomes |
+| Q6 | Services externes pour les tests | **Réponse démentie par les faits** — voir ci-dessous |
 | Q7 | Tests ARM64 | **Build ARM64, tests sur amd64 uniquement.** Risque assumé et documenté |
 | Q8 | Frontière du pipeline | **S'arrête à la publication de l'image.** Pas de GitOps, pas d'accès cluster depuis la CI |
 | Q9 | Tags d'images | **`1.2.3` + `1.2` + `1`, sans `latest`.** Chemin : `ghcr.io/rociadb/<nom-du-dépôt>` |
 | Q10 | État de `rocia2` | **amd64**, Docker + buildx, rustup, node + pnpm et uv **déjà installés**. **Disque < 50 Go** |
+
+#### Correction de Q6 — des tests ont bien besoin d'une base
+
+La réponse au cadrage était « tests autonomes ». L'inspection de
+`V2-RociaDB-orchestrator` la dément : sa suite monte un PostgreSQL 18 par
+binaire de test via `testcontainers`, et il y a 17 binaires de tests
+d'intégration.
+
+Deux conséquences portées dans le template :
+
+- `_rust-quality.yml` accepte un input `postgres` qui démarre **un serveur
+  unique** pour toute la suite et expose `DATABASE_URL`, avec ramassage en
+  `always()`. Sur un runner persistant au disque contraint, c'est la différence
+  entre un conteneur et plusieurs centaines.
+- Le harnais du dépôt doit honorer `DATABASE_URL` quand il est présent, sinon
+  chaque processus nextest démarrerait le sien. C'est une modification côté
+  dépôt, pas côté template.
+
+Les autres dépôts privés sont probablement dans le même cas : la réponse Q6 est
+à considérer comme fausse par défaut, et à vérifier dépôt par dépôt.
 
 #### Conséquence de Q4 — dette de référentiel à surveiller
 

@@ -20,6 +20,11 @@ allow = [
 ]
 confidence-threshold = 0.9
 
+# Les crates du workspace portent `publish = false` : ils ne sont pas
+# distribués, et leur champ `license` peut légitimement ne pas être une
+# expression SPDX (« UNLICENSED »). Seules les dépendances sont auditées.
+private = { ignore = true }
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
