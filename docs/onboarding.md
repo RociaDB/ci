@@ -159,6 +159,12 @@ Ce que cela dépose :
 | `.config/nextest.toml` *(Rust)* | Profil `ci` produisant le JUnit | Non — nextest le lit dans l'arbre de travail |
 | `Dockerfile` | Assemblage de l'image | Oui, à adapter — mais **sans jamais ajouter de `RUN`** |
 
+⚠️ Les deux fichiers de workflow portent un bloc `permissions` **par job**, en
+plus du `permissions: {}` en tête de fichier. Ce n'est pas décoratif : un
+workflow appelé ne peut jamais demander plus que ce que son appelant lui
+accorde, et un stub écrit à la main sans ces blocs est **refusé au chargement**,
+avec un message qui ne dit pas quel appelant corriger.
+
 Puis ouvrir `ci.yml` et régler les interrupteurs :
 
 ```yaml
@@ -169,7 +175,55 @@ Puis ouvrir `ci.yml` et régler les interrupteurs :
       squash_tm: true        # une fois l'instance Squash TM en place
 ```
 
-### 2.1 Scripts attendus (Node)
+### 2.1 Rust — interrupteurs et prérequis
+
+| Input | Quand l'activer |
+|---|---|
+| `protoc: true` | Un `build.rs` compile des `.proto` (tonic). C'est la seule dépendance de la chaîne Rust que cargo n'installe pas : sans elle, le crate ne compile pas |
+| `postgres: postgres:18-alpine` | La suite a besoin d'une base. Démarre **un** serveur pour tout le job et expose `DATABASE_URL`, `CI_POSTGRES_HOTE`, `CI_POSTGRES_PORT` et `CI_POSTGRES_CONTENEUR` |
+| `postgres_initdb_args` | Locale et encodage de la base de test, si le tri compte |
+| `gates_script` | Défaut `scripts/ci-gates.sh`, exécuté s'il existe et est exécutable. C'est là que vont les critères d'arrêt propres au dépôt |
+| `binary_name` | Si le binaire ne porte pas le nom du dépôt |
+
+Le dépôt doit fournir `.config/nextest.toml` — `cargo test` ne produit pas de
+JUnit, `cargo nextest` si, et c'est ce que Squash TM consomme.
+
+#### Un harnais qui monte ses propres conteneurs
+
+Piège rencontré sur le premier dépôt migré, et qui se reposera sur tout projet
+utilisant `testcontainers`.
+
+**nextest exécute chaque test dans son propre processus.** Un harnais qui
+démarre un conteneur par binaire de test via un `OnceCell` statique en démarre
+alors **un par test** — des centaines, sur un runner persistant au disque
+contraint.
+
+Le harnais doit donc accepter un serveur fourni de l'extérieur, et ne démarrer
+le sien que si aucun ne l'est :
+
+```rust
+fn externe() -> Option<Self> {
+    let hote = std::env::var("CI_POSTGRES_HOTE").ok()?;
+    let port = std::env::var("CI_POSTGRES_PORT").ok()?.parse().ok()?;
+    let docker = std::env::var("CI_POSTGRES_CONTENEUR").ok()?;
+    Some(Self { _conteneur: None, docker, hote, port })
+}
+```
+
+Trois points s'ensuivent, et chacun a coûté une exécution rouge :
+
+- toute méthode faisant `docker exec` doit viser un **identifiant stocké**, plus
+  le handle testcontainers, qui n'existe pas en mode externe ;
+- un compteur de bases `AtomicU32` est propre au processus : sur un serveur
+  partagé, il faut y mêler `std::process::id()`, sinon deux tests concurrents
+  réclament la même base ;
+- la vérification du point Docker doit être sautée en mode externe.
+
+Les identifiants de la base de CI sont ceux du module `postgres` de
+testcontainers (`postgres`/`postgres`), précisément pour qu'un tel harnais
+n'ait qu'une adresse à changer.
+
+### 2.2 Scripts attendus (Node)
 
 Le workflow appelle des scripts `package.json` plutôt que des outils en dur,
 pour que chaque dépôt garde la main sur sa configuration :
@@ -185,7 +239,7 @@ pour que chaque dépôt garde la main sur sa configuration :
 }
 ```
 
-### 2.2 Configuration attendue (Python)
+### 2.3 Configuration attendue (Python)
 
 Dans `pyproject.toml` : sections `[tool.ruff]`, `[tool.mypy]` et
 `[tool.coverage.run]`. Ruff ne sait pas étendre une configuration distante, un
@@ -213,6 +267,12 @@ Pour un dépôt **public**, activer aussi `Settings` → `Code security` :
 
 Enfin, vérifier que le dépôt est bien dans la portée des secrets d'organisation
 dont il a besoin (§0.4).
+
+Pour un dépôt sur `rocia2`, vérifier aussi que le runner **porte bien le label**
+attendu par `runs_on`. `runs-on` n'apparie que des labels : le nom du runner
+n'entre dans aucun appariement, et un job qui ne trouve personne reste en
+`queued` vingt-quatre heures avant de dire quoi que ce soit. Voir
+[`runner.md`](runner.md).
 
 ---
 
@@ -242,6 +302,20 @@ tags et releases déjà produits restent valides.
 
 ---
 
+## Quand le template évolue
+
+Les dépôts consommateurs épinglent `@v1`, un tag **flottant**. Une correction
+poussée sur `main` de `ci` ne les atteint pas tant que le tag n'a pas bougé :
+
+```bash
+git fetch origin && git tag -f v1 origin/main && git push -f origin v1
+```
+
+Symptôme quand on l'oublie : la correction semble sans effet, et l'exécution
+rejoue exactement le même échec. La page d'une exécution indique sous
+`referenced_workflows` le SHA réellement chargé — c'est le moyen le plus rapide
+de le vérifier.
+
 ## Cas particuliers connus
 
 **Une dépendance Python sans wheel aarch64.** Le job `docker` échoue à l'étape de
@@ -257,3 +331,15 @@ dépôt le demande.
 **Des tests nécessitant un service externe.** Le cadrage indique qu'il n'y en a
 pas. Si cela change, ajouter un bloc `services:` demandera une évolution du
 workflow réutilisable, pas du dépôt.
+
+**Un workspace Cargo dont la version vit dans `[workspace.package]`.** Le
+`Cargo.toml` racine n'a alors pas de `[package]`, et rien ne garantit que la
+stratégie `rust` de release-please sache y trouver la version à incrémenter.
+Non vérifié à ce jour. Le repli est le mode manifest avec `extra-files`.
+
+**Un premier run rouge n'est pas un échec de la migration.** Les étapes sont
+chaînées en `!cancelled()` pour montrer tous les défauts d'un coup plutôt qu'un
+par exécution. Sur un dépôt jamais passé par cette chaîne, attendre du rouge
+sur `cargo fmt --all --check` et sur `clippy --all-targets --all-features
+-D warnings`, plus sévères que ce qui se lance d'ordinaire en local. L'audit des
+dépendances, lui, est en `continue-on-error` : il ne fait jamais échouer le job.
