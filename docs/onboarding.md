@@ -128,13 +128,28 @@ ls LICENSE                           # obligatoire pour un dépôt publié
 
 Le cadrage indique qu'aucun dépôt n'en a. Si ce n'est pas le cas pour celui-ci,
 release-please repartirait de `0.1.0` et écraserait l'historique de versions.
-Amorcer d'abord en ajoutant à `.github/workflows/ci.yml`, sous `with:` du job
-`main` :
 
-```yaml
-      # À retirer après la première Release PR correctement numérotée.
-      last_release_sha: <sha du commit de la dernière release>
+**L'amorçage passe par le mode manifest**, pas par le stub. Cette page disait
+d'ajouter `last_release_sha:` sous `with:` : aucun workflow réutilisable ne
+déclare cette entrée, et GitHub refuse alors tout l'appel au chargement. Le mode
+simple de release-please n'en a pas l'équivalent non plus — l'action ne
+l'expose pas. Le mode manifest, si : `last-release-sha` (ou `bootstrap-sha`
+pour la toute première release) dans `release-please-config.json`, la version
+courante dans `.release-please-manifest.json`, et `release_type: ''` sous
+`with:` du job `main` pour que l'action les lise. Le paquet `.` porte la
+stratégie du langage — `rust`, `node` ou `python` :
+
+```json
+{
+  "last-release-sha": "<sha du commit de la dernière release>",
+  "include-component-in-tag": false,
+  "packages": { ".": { "release-type": "rust" } }
+}
 ```
+
+`include-component-in-tag: false` garde des tags `v1.2.3` : le job `docker` les
+lit comme des versions semver, et un tag préfixé du nom du paquet n'en est pas
+une.
 
 ---
 
@@ -148,6 +163,15 @@ CI=/chemin/vers/RociaDB-ci
 cp -r "$CI/templates/<lang>/." .
 cp "$CI/templates/common/renovate.json" .
 ```
+
+**Un workspace Cargo dont les crates héritent leur version** — `version.workspace
+= true` — copie en plus :
+
+```bash
+cp -r "$CI/templates/rust-workspace/." .
+```
+
+et passe `release_type: ''` au job `main`. Voir « Cas particuliers connus ».
 
 Ce que cela dépose :
 
@@ -332,10 +356,28 @@ dépôt le demande.
 pas. Si cela change, ajouter un bloc `services:` demandera une évolution du
 workflow réutilisable, pas du dépôt.
 
-**Un workspace Cargo dont la version vit dans `[workspace.package]`.** Le
-`Cargo.toml` racine n'a alors pas de `[package]`, et rien ne garantit que la
-stratégie `rust` de release-please sache y trouver la version à incrémenter.
-Non vérifié à ce jour. Le repli est le mode manifest avec `extra-files`.
+**Un workspace Cargo dont la version vit dans `[workspace.package]`.** La
+stratégie `rust` de release-please **ne sait pas l'écrire**, vérifié le
+24 septembre 2026 contre release-please 17.11 (`src/strategies/rust.ts`,
+`src/updaters/rust/cargo-toml.ts`). Elle réécrit `package.version` dans chaque
+membre, et un membre qui porte `version.workspace = true` y a une table, pas une
+chaîne : l'exécution tombe sur « value at path package.version is not tagged ».
+Le `Cargo.toml` racine, sans `[package]`, tomberait ensuite sur « is not a
+package manifest ». Le plugin `cargo-workspace` refuse la même forme, en toutes
+lettres.
+
+Le remède est le mode manifest, avec la stratégie `simple` et deux fichiers de
+plus, que `templates/rust-workspace/` porte :
+
+| Fichier | Ce que release-please y écrit |
+|---|---|
+| `Cargo.toml` | `workspace.package.version`, par un `extra-files` en jsonpath |
+| `Cargo.lock` | la version de **chaque paquet sans `source`**, c'est-à-dire des membres du workspace ; ceux du registre en ont une |
+| `version.txt` | la version, que la stratégie `simple` tient |
+
+Sans le second, le verrou garderait l'ancienne version des membres, et le
+premier `cargo build --locked` après la release échouerait. Dans le stub,
+`release_type: ''` sous `with:` du job `main`.
 
 **Un premier run rouge n'est pas un échec de la migration.** Les étapes sont
 chaînées en `!cancelled()` pour montrer tous les défauts d'un coup plutôt qu'un
