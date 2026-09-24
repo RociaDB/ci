@@ -139,9 +139,13 @@ jobs:
           retention-days: 7
 
       # Sur un runner persistant, un conteneur oublié survit à l'exécution.
+      # --volumes : l'image postgres déclare un VOLUME, que `docker rm` seul
+      # laisse derrière lui. Sans l'option, chaque exécution abandonnait sur
+      # le runner un volume anonyme de plusieurs gigaoctets — toutes les bases
+      # de la suite —, et la maintenance ne prune pas les volumes.
       - name: ramassage
         if: ${{ always() && inputs.postgres != '' }}
-        run: docker rm --force ci-postgres || true
+        run: docker rm --force --volumes ci-postgres || true
 
   compat:
     if: ${{ inputs.compat_versions != '[]' }}

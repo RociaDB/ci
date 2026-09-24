@@ -23,6 +23,13 @@ jobs:
       - name: images et couches Docker inutilisées
         run: docker system prune --all --force --filter 'until=168h'
 
+      # `system prune` ne touche pas aux volumes, et le filtre `until` ne s'y
+      # applique pas. `volume prune` ne retire que les volumes **anonymes** et
+      # inutilisés (Docker ≥ 23) : ceux qu'un conteneur de test a laissés en
+      # partant, jamais un volume nommé.
+      - name: volumes anonymes abandonnés
+        run: docker volume prune --force
+
       - name: registre et caches cargo
         run: |
           set -euo pipefail
