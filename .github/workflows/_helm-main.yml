@@ -1,0 +1,138 @@
+# Helm — pipeline sur main.
+# Même structure que _rust-main.yml : c'est release_created qui distingue le push
+# de dev du push de release, il n'y a pas de troisième workflow. Les charts sont
+# publiés en OCI sur oci://ghcr.io/<organisation>/charts.
+name: helm · main
+
+on:
+  workflow_call:
+    inputs:
+      runs_on:
+        description: 'Label du runner. ubuntu-latest pour les dépôts publics, rocia2 pour les privés.'
+        type: string
+        default: ubuntu-latest
+      charts:
+        description: >-
+          Tableau JSON des répertoires de charts, relatifs à la racine du dépôt,
+          ex. ["charts/socle","charts/plateforme"]. Défaut ["."] : un chart à
+          la racine.
+        type: string
+        default: '["."]'
+      values_files:
+        description: "Fichiers de valeurs rendus par le gate de qualité : voir _helm-quality.yml."
+        type: string
+        default: '[]'
+      helm_version:
+        description: 'Version de Helm à installer.'
+        type: string
+        default: v4.3.1
+      release_type:
+        description: >-
+          Stratégie de release-please. Défaut : « helm », un chart à la racine,
+          dont la version est celle de son Chart.yaml. Vide : la configuration du
+          dépôt, release-please-config.json et .release-please-manifest.json —
+          le mode manifeste, pour plusieurs charts, chacun avec sa version et
+          son tag.
+        type: string
+        default: helm
+    secrets:
+      RELEASE_APP_ID:
+        required: false
+      RELEASE_APP_PRIVATE_KEY:
+        required: false
+
+permissions: {}
+
+jobs:
+  quality:
+    # Un workflow appelé ne peut pas demander plus que ce que son
+    # appelant lui accorde : sans cette ligne, le permissions: {} en
+    # tête de fichier réduirait le gate à zéro droit.
+    permissions:
+      contents: read
+    uses: RociaDB/ci/.github/workflows/_helm-quality.yml@v1
+    with:
+      runs_on: ${{ inputs.runs_on }}
+      charts: ${{ inputs.charts }}
+      values_files: ${{ inputs.values_files }}
+      helm_version: ${{ inputs.helm_version }}
+
+  release-please:
+    needs: quality
+    runs-on: ${{ inputs.runs_on }}
+    permissions:
+      contents: read
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      releases_created: ${{ steps.release.outputs.releases_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      # Indispensable : une PR ouverte avec le GITHUB_TOKEN par défaut ne
+      # déclenche aucun workflow, la Release PR resterait sans check et donc
+      # non mergeable.
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          # Vide, l'action lit release-please-config.json : c'est le mode
+          # manifeste, et le dépôt y déclare ses charts.
+          release-type: ${{ inputs.release_type }}
+
+  # Publie tous les charts de la liste dès qu'une release existe. Avec plusieurs
+  # paquets, release_created ne dit rien (il ne parle que de la racine) :
+  # releases_created dit qu'au moins un a été publié, et le chart dont la
+  # version est déjà dans le registre est simplement laissé en l'état.
+  publish:
+    if: ${{ needs.release-please.outputs.releases_created == 'true' || needs.release-please.outputs.release_created == 'true' }}
+    needs: release-please
+    runs-on: ${{ inputs.runs_on }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      # Le push qui suit le merge de la Release PR : les Chart.yaml y portent
+      # déjà les versions publiées.
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: ${{ inputs.helm_version }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: connexion à ghcr.io
+        env:
+          ACTEUR: ${{ github.actor }}
+          JETON: ${{ secrets.GITHUB_TOKEN }}
+        run: helm registry login ghcr.io --username "$ACTEUR" --password-stdin <<<"$JETON"
+
+      - name: empaquetage et publication
+        env:
+          CHARTS: ${{ inputs.charts }}
+          PROPRIETAIRE: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          proprietaire="${PROPRIETAIRE,,}"
+          sortie="$RUNNER_TEMP/charts"
+          mkdir -p "$sortie"
+          while read -r chart; do
+            if grep -q '^dependencies:' "$chart/Chart.yaml"; then
+              helm dependency build "$chart"
+            fi
+            nom=$(helm show chart "$chart" | sed -n 's/^name: *//p' | tr -d "\"'")
+            version=$(helm show chart "$chart" | sed -n 's/^version: *//p' | tr -d "\"'")
+            [ -n "$nom" ] && [ -n "$version" ] || { echo "::error::$chart : nom ou version illisible"; exit 1; }
+
+            # La version d'un chart est immuable : celle qui est déjà dans le
+            # registre n'est pas poussée une seconde fois.
+            if helm show chart "oci://ghcr.io/$proprietaire/charts/$nom" --version "$version" > /dev/null 2>&1; then
+              echo "$nom $version existe déjà : rien à pousser."
+              continue
+            fi
+            helm package "$chart" --destination "$sortie"
+            helm push "$sortie/$nom-$version.tgz" "oci://ghcr.io/$proprietaire/charts"
+          done < <(jq -r '.[]' <<<"$CHARTS")

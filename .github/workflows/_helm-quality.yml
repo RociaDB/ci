@@ -1,0 +1,88 @@
+# Helm — gate de qualité. Appelé sur PR par le stub du dépôt, et sur main par _helm-main.yml.
+# Nom de job figé : quality sert de required status check.
+#
+# Pour chaque chart : helm lint, puis helm template, avec les valeurs par défaut
+# du chart et avec chaque fichier de valeurs demandé. Un chart qui ne se rend pas
+# avec les valeurs qu'on déploie réellement est un chart cassé, même s'il passe
+# le lint.
+name: helm · quality
+
+on:
+  workflow_call:
+    inputs:
+      runs_on:
+        description: 'Label du runner. ubuntu-latest pour les dépôts publics, rocia2 pour les privés.'
+        type: string
+        default: ubuntu-latest
+      charts:
+        description: >-
+          Tableau JSON des répertoires de charts, relatifs à la racine du dépôt,
+          ex. ["charts/socle","charts/plateforme"]. Défaut ["."] : un chart à
+          la racine.
+        type: string
+        default: '["."]'
+      values_files:
+        description: >-
+          Tableau JSON de fichiers de valeurs, relatifs au répertoire de CHAQUE
+          chart, ex. ["ci/banc.yaml","ci/production.yaml"]. Un chart utilise
+          ceux qu'il contient ; un fichier qu'aucun chart ne contient est une
+          erreur (faute de frappe). Défaut [] : valeurs par défaut seulement.
+        type: string
+        default: '[]'
+      helm_version:
+        description: 'Version de Helm à installer.'
+        type: string
+        default: v4.3.1
+
+permissions: {}
+
+jobs:
+  quality:
+    runs-on: ${{ inputs.runs_on }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: ${{ inputs.helm_version }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: lint et rendu
+        env:
+          CHARTS: ${{ inputs.charts }}
+          VALUES_FILES: ${{ inputs.values_files }}
+        run: |
+          set -euo pipefail
+          utilises=$(mktemp)
+          while read -r chart; do
+            echo "::group::$chart"
+            [ -f "$chart/Chart.yaml" ] || { echo "::error::$chart/Chart.yaml n'existe pas"; exit 1; }
+            # Les sous-charts déclarés s'obtiennent avant le lint, sinon le
+            # rendu échoue sur un chart qui n'a rien de cassé.
+            if grep -q '^dependencies:' "$chart/Chart.yaml"; then
+              helm dependency build "$chart"
+            fi
+
+            helm lint "$chart"
+            helm template ci "$chart" > /dev/null
+
+            while read -r fichier; do
+              [ -n "$fichier" ] || continue
+              if [ -f "$chart/$fichier" ]; then
+                echo "valeurs : $chart/$fichier"
+                helm lint "$chart" --values "$chart/$fichier"
+                helm template ci "$chart" --values "$chart/$fichier" > /dev/null
+                echo "$fichier" >> "$utilises"
+              fi
+            done < <(jq -r '.[]' <<<"$VALUES_FILES")
+            echo "::endgroup::"
+          done < <(jq -r '.[]' <<<"$CHARTS")
+
+          while read -r fichier; do
+            [ -n "$fichier" ] || continue
+            grep -qxF "$fichier" "$utilises" || {
+              echo "::error::values_files : « $fichier » n'existe dans aucun chart"
+              exit 1
+            }
+          done < <(jq -r '.[]' <<<"$VALUES_FILES")
