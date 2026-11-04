@@ -81,8 +81,13 @@ jobs:
           # sait parler aux deux n'a alors qu'une adresse à changer.
           # L'étiquette rociadb.ci=true désigne ce que la CI a créé : c'est
           # elle que maintenance-runner.yml suit pour ne retirer que cela.
+          # --shm-size : Docker ne donne que 64 Mo de /dev/shm par défaut ; une
+          # suite qui ouvre beaucoup de bases jetables en parallèle épuisait la
+          # mémoire partagée de PostgreSQL (« could not resize shared memory
+          # segment … No space left on device »).
           docker run --detach --name ci-postgres \
             --label rociadb.ci=true \
+            --shm-size=1g \
             --env POSTGRES_PASSWORD=postgres \
             --env POSTGRES_INITDB_ARGS="$INITDB_ARGS" \
             --publish 127.0.0.1:5432:5432 \
