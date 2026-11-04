@@ -50,3 +50,4 @@ jobs:
       publish_crate: false   # true pour rociadb-core-sdk-rust
       docker: false          # true pour un applicatif livré en image
       squash_tm: false       # true une fois l'instance Squash TM en place
+      # release_type: ''     # workspace Cargo à version héritée : voir templates/rust-workspace/

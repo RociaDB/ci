@@ -36,6 +36,15 @@ on:
       release_environment:
         type: string
         default: release
+      release_type:
+        description: >-
+          Stratégie de release-please. Défaut : « python », une version par dépôt,
+          lue dans le manifeste du langage. Vide : la configuration du dépôt,
+          release-please-config.json et .release-please-manifest.json — le seul
+          moyen d'amorcer sur des tags existants (last-release-sha) ou de
+          versionner ce que la stratégie ne sait pas lire.
+        type: string
+        default: python
     secrets:
       RELEASE_APP_ID:
         required: false
@@ -107,7 +116,9 @@ jobs:
         id: release
         with:
           token: ${{ steps.app-token.outputs.token }}
-          release-type: python
+          # Vide, l'action lit release-please-config.json : c'est le mode
+          # manifest, et le dépôt y dit ce que la stratégie ne sait pas.
+          release-type: ${{ inputs.release_type }}
 
   publish:
     if: ${{ needs.release-please.outputs.release_created == 'true' && inputs.publish_pypi }}

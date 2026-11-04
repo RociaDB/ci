@@ -127,6 +127,15 @@ Cas non couvert : un **workspace Cargo** multi-crates à versionner indépendamm
 nécessiterait le mode manifest. Non implémenté — à traiter le jour où un dépôt le
 demande, plutôt qu'à moitié aujourd'hui.
 
+*Révision du 24 septembre 2026.* Le mode simple reste le défaut, mais chaque
+workflow `_<lang>-main.yml` prend une entrée `release_type` : vide, l'action lit
+la configuration du dépôt. Deux cas l'ont demandé. Un workspace Cargo dont les
+membres héritent leur version — la stratégie `rust` ne sait pas l'écrire, voir
+l'onboarding. Et l'amorçage sur des tags existants, que l'onboarding confiait à
+une entrée `last_release_sha` qu'aucun workflow ne déclarait. Les sorties ne
+changent pas : pour le paquet racine `.`, l'action les rend à plat, comme en mode
+simple.
+
 ---
 
 ## C — Runners
