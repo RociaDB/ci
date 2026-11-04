@@ -17,6 +17,12 @@ allow = [
     "MPL-2.0",
     "Unicode-3.0",
     "Zlib",
+    # Décision du propriétaire, 4 novembre 2026 : deux licences permissives
+    # approuvées par l'OSI, constatées sur le back-office de V2.
+    # 0BSD : quoted_printable (par lettre, l'envoi de courriel).
+    "0BSD",
+    # La licence Apache 2.0 avec l'exception LLVM : ar_archive_writer.
+    "Apache-2.0 WITH LLVM-exception",
     # Portée par webpki-roots, qui distribue le magasin de certificats de
     # Mozilla. Ajoutée après constat, pas par précaution : cette liste est une
     # politique, et chaque entrée doit être une décision.
