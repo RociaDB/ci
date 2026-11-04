@@ -48,6 +48,9 @@ Toutes sont à bumper en même temps que le tag majeur.
 - Chemin : `ghcr.io/rociadb/<nom-du-dépôt>`
 - Tags : `1.2.3`, `1.2`, `1` — **jamais `latest`**, qui rend un déploiement
   Kubernetes non reproductible.
+- Une image en plus (`extra_images` de `_rust-main.yml`) : `ghcr.io/rociadb/<nom-du-dépôt>-<suffixe>`,
+  mêmes tags, mais de **sa propre version** ; une étiquette `X.Y.Z` existante
+  n'est jamais repoussée. Les charts Helm : `oci://ghcr.io/rociadb/charts/<chart>`.
 - Utilisateur non-root, labels OCI générés par `docker/metadata-action`.
 - **Aucune instruction `RUN` dans les Dockerfiles.** Toute la construction a lieu
   en amont dans la CI, l'image ne fait que copier. C'est ce qui permet de

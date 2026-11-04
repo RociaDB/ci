@@ -26,6 +26,7 @@ jobs:
 | [`docs/cadrage.md`](docs/cadrage.md) | Registre des décisions et leurs raisons |
 | [`docs/conventions.md`](docs/conventions.md) | Commits, noms de jobs, tags d'images, références Squash TM |
 | [`docs/secrets.md`](docs/secrets.md) | Secrets d'organisation et leurs portées |
+| [`docs/images-en-plus-et-helm.md`](docs/images-en-plus-et-helm.md) | Images en plus d'un dépôt Rust (`extra_images`) et publication des charts Helm |
 | [`docs/runner.md`](docs/runner.md) | Runner `rocia2` et contraintes associées |
 
 ## Structure
@@ -36,6 +37,7 @@ jobs:
   _rust-main.yml       quality → release-please → publish / docker / squash-tm
   _node-*.yml          idem pour Node et TypeScript (package npm ou Nuxt SSR)
   _python-*.yml        idem pour Python (gestionnaire uv)
+  _helm-*.yml          idem pour des charts Helm, publiés en OCI sur GHCR
   _pr-title.yml        lint du titre de PR — squash-merge oblige
   maintenance-runner.yml  purge hebdomadaire du disque de rocia2
 actions/
