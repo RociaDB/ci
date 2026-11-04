@@ -49,6 +49,17 @@ on:
         description: "Nom du binaire à embarquer dans l'image. Défaut : nom du dépôt."
         type: string
         default: ''
+      extra_images:
+        description: >-
+          Images en plus, pour d'autres binaires du même dépôt : tableau JSON
+          d'objets {binary, suffix, version_from, dockerfile}. Chacune est
+          publiée sous ghcr.io/<organisation>/<dépôt>-<suffix>, étiquetée de la
+          version lue dans le [package] du Cargo.toml « version_from » (et non
+          de celle du dépôt), et jamais republiée si cette version existe déjà.
+          « dockerfile » est relatif à la racine ; il copie
+          dist/${TARGETARCH}/<binary>. Défaut [] : aucune image en plus.
+        type: string
+        default: '[]'
       image_retention:
         description: "Nombre de versions d'image taguées à conserver sur GHCR."
         type: string
@@ -200,6 +211,28 @@ jobs:
           cp "target/x86_64-unknown-linux-musl/release/$BIN"  dist/amd64/app
           cp "target/aarch64-unknown-linux-musl/release/$BIN" dist/arm64/app
 
+      # Les binaires des images en plus sortent de la même compilation : cargo
+      # construit tous ceux de l'espace de travail, rien n'est recompilé. Ils
+      # passent par une archive tar, parce qu'un artefact perd le bit
+      # d'exécution et que COPY le conserverait absent dans l'image.
+      - name: binaires des images en plus
+        if: ${{ fromJSON(inputs.extra_images)[0] != null }}
+        env:
+          EXTRA: ${{ inputs.extra_images }}
+        run: |
+          set -euo pipefail
+          for bin in $(jq -r '.[].binary' <<<"$EXTRA"); do
+            cp "target/x86_64-unknown-linux-musl/release/$bin"  "dist/amd64/$bin"
+            cp "target/aarch64-unknown-linux-musl/release/$bin" "dist/arm64/$bin"
+          done
+          tar -cf dist-extra.tar dist
+      - uses: actions/upload-artifact@v4
+        if: ${{ fromJSON(inputs.extra_images)[0] != null }}
+        with:
+          name: dist-extra
+          path: dist-extra.tar
+          retention-days: 1
+
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -247,6 +280,128 @@ jobs:
         continue-on-error: true
         with:
           package-name: ${{ github.event.repository.name }}
+          package-type: container
+          min-versions-to-keep: ${{ inputs.image_retention }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # Une image par entrée de extra_images, à partir des binaires du job docker.
+  # Job voisin plutôt que boucle dans docker : le nombre d'images est une donnée,
+  # et seule une matrice sait faire autant d'étapes que d'entrées.
+  docker-extra:
+    if: ${{ needs.release-please.outputs.release_created == 'true' && inputs.docker && fromJSON(inputs.extra_images)[0] != null }}
+    needs: [release-please, docker]
+    runs-on: ${{ inputs.runs_on }}
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(inputs.extra_images) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-extra
+      - run: tar -xf dist-extra.tar
+
+      # Cette image a sa propre version : celle du Cargo.toml qui la décrit.
+      - name: version de l'image
+        id: version
+        env:
+          FICHIER: ${{ matrix.image.version_from }}
+          BINAIRE: ${{ matrix.image.binary }}
+          SUFFIXE: ${{ matrix.image.suffix }}
+          DOCKERFILE: ${{ matrix.image.dockerfile }}
+        run: |
+          set -euo pipefail
+          [ -n "$BINAIRE" ]    || { echo "::error::extra_images : la clé « binary » manque"; exit 1; }
+          [ -n "$SUFFIXE" ]    || { echo "::error::extra_images : la clé « suffix » manque"; exit 1; }
+          [ -n "$FICHIER" ]    || { echo "::error::extra_images : la clé « version_from » manque"; exit 1; }
+          [ -f "$DOCKERFILE" ] || { echo "::error::extra_images : le Dockerfile « $DOCKERFILE » (clé « dockerfile ») n'existe pas"; exit 1; }
+          version=$(awk '
+            /^\[/ { dans = ($0 ~ /^\[package\][ \t]*$/) }
+            dans && /^version[ \t]*=/ { match($0, /"[^"]+"/); print substr($0, RSTART + 1, RLENGTH - 2); exit }
+          ' "$FICHIER")
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+].+)?$ ]]; then
+            echo "::error::pas de version = \"X.Y.Z\" dans le [package] de $FICHIER (version.workspace = true n'est pas lue : l'image a sa propre version)"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # L'étiquette X.Y.Z est immuable : une version de l'image qui n'a pas
+      # changé ne se republie pas. Seule l'absence de l'étiquette autorise le
+      # push ; toute autre erreur d'inspection arrête le job.
+      - name: l'étiquette existe-t-elle déjà ?
+        id: existe
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}-${{ matrix.image.suffix }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          ref="${IMAGE,,}:$VERSION"
+          if sortie=$(docker buildx imagetools inspect "$ref" 2>&1); then
+            echo "$ref existe déjà : rien à pousser."
+            echo "existe=true" >> "$GITHUB_OUTPUT"
+          elif grep -qiE 'not found|manifest unknown|name unknown|no such manifest|denied|unauthorized' <<<"$sortie"; then
+            echo "$ref n'existe pas : publication."
+            echo "existe=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "$sortie"
+            exit 1
+          fi
+
+      - uses: docker/metadata-action@v5
+        if: ${{ steps.existe.outputs.existe == 'false' }}
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}-${{ matrix.image.suffix }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}},value=${{ steps.version.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.version }}
+            type=semver,pattern={{major}},value=${{ steps.version.outputs.version }}
+
+      # Même contrat que l'image principale : aucun RUN dans le Dockerfile.
+      - uses: docker/build-push-action@v6
+        if: ${{ steps.existe.outputs.existe == 'false' }}
+        with:
+          context: .
+          file: ${{ matrix.image.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image.suffix }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image.suffix }}
+
+      - name: purge des versions non taguées
+        if: ${{ steps.existe.outputs.existe == 'false' }}
+        uses: actions/delete-package-versions@v5
+        continue-on-error: true
+        with:
+          package-name: ${{ github.event.repository.name }}-${{ matrix.image.suffix }}
+          package-type: container
+          delete-only-untagged-versions: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: rétention des versions taguées
+        if: ${{ steps.existe.outputs.existe == 'false' }}
+        uses: actions/delete-package-versions@v5
+        continue-on-error: true
+        with:
+          package-name: ${{ github.event.repository.name }}-${{ matrix.image.suffix }}
           package-type: container
           min-versions-to-keep: ${{ inputs.image_retention }}
           token: ${{ secrets.GITHUB_TOKEN }}
