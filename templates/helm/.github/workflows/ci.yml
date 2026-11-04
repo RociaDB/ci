@@ -1,0 +1,47 @@
+# Toute la logique vit dans RociaDB/ci. Ce fichier ne fait que la câbler.
+# Dépôt PRIVÉ : remplacer ubuntu-latest par rocia2.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  # Annulation sur les PR seulement. Jamais sur main : chaque push doit être vu
+  # par release-please, sous peine de perdre un incrément de version.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
+
+jobs:
+  pr:
+    if: github.event_name == 'pull_request'
+    # Le job appelé ne peut recevoir que ce qui lui est accordé ici.
+    permissions:
+      contents: read
+    uses: RociaDB/ci/.github/workflows/_helm-quality.yml@v1
+    with:
+      runs_on: ubuntu-latest
+      charts: '["charts/socle","charts/plateforme"]'   # ["."] : un chart à la racine
+      # Chemins relatifs à chaque chart ; un chart utilise ceux qu'il contient.
+      # values_files: '["ci/banc.yaml"]'
+
+  main:
+    if: github.event_name == 'push'
+    # L'union de ce que demandent les jobs de _helm-main.yml : le job publish
+    # pousse les charts sur GHCR.
+    permissions:
+      contents: read
+      packages: write
+    uses: RociaDB/ci/.github/workflows/_helm-main.yml@v1
+    secrets: inherit
+    with:
+      runs_on: ubuntu-latest
+      # charts et values_files : mêmes valeurs que sur le job pr
+      charts: '["charts/socle","charts/plateforme"]'
+      # Deux charts : le mode manifeste (templates/helm-manifeste/). Pour un seul
+      # chart à la racine, retirer cette ligne : la stratégie « helm » suffit.
+      release_type: ''
