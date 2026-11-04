@@ -47,12 +47,52 @@ sur les dépôts publics, la règle ne coûte rien.
 
 ## Entretien
 
-`maintenance-runner.yml` s'exécute le dimanche : `docker system prune`, purge du
-registre cargo et suppression des répertoires `target` de plus de 14 jours. Il
-affiche l'espace disque avant et après — c'est le signal à surveiller.
+`maintenance-runner.yml` s'exécute le dimanche. Par défaut il fait un ménage
+**sélectif** (voir la section suivante) ; avec `CI_MENAGE_COMPLET=true`, il
+ajoute le ménage d'une machine dédiée : `docker system prune`, volumes anonymes
+abandonnés, purge du registre cargo. Dans les deux cas il supprime les
+répertoires `target` de plus de 14 jours dans le travail du runner et affiche
+l'espace disque avant et après — c'est le signal à surveiller.
 
 Si le disque sature malgré tout, la piste suivante est de réduire la rétention
 des artefacts (actuellement 7 jours) avant de toucher aux caches.
+
+## Un runner sur un poste de travail
+
+Quand le runner tourne sur la machine de quelqu'un (sous son compte, avec son
+Docker et son `HOME`), le ménage ne doit retirer que ce que la CI a créé. C'est
+le comportement par défaut de `maintenance-runner.yml`.
+
+**Ce que le ménage sélectif fait.** Les conteneurs que la CI lance portent
+l'étiquette `rociadb.ci=true` (aujourd'hui, le `ci-postgres` de
+`_rust-quality.yml`). Chaque dimanche, il retire ceux qui sont arrêtés, avec
+leurs volumes anonymes, puis les volumes étiquetés `rociadb.ci=true` que plus
+aucun conteneur n'utilise, et enfin les répertoires `target` de plus de 14 jours
+dans le travail du runner (le parent de `$RUNNER_WORKSPACE`, rien d'autre).
+
+**Ce qu'il ne fait pas.** Aucun `docker system prune`, aucun `docker volume
+prune` sans filtre, aucun `docker builder prune`, rien sous `~/.cargo`. Il ne
+touche pas aux conteneurs en marche, ni à ceux que les suites de test créent
+(testcontainers) ou que des actions tierces démarrent : ils n'ont pas
+l'étiquette. Le cache de construction de buildx n'est pas visé non plus : le
+constructeur vient de `docker/setup-buildx-action`, qui le démonte lui-même en
+fin de job, et le cache de couches est celui de GitHub (`type=gha`).
+
+**Une machine dédiée.** Pour retrouver le ménage complet (toutes les images
+inutilisées de plus d'une semaine, tous les volumes anonymes abandonnés, les
+sources et archives du registre cargo non lues depuis 30 jours), poser la
+variable `CI_MENAGE_COMPLET` à `true` dans les variables du dépôt `ci` ou de
+l'organisation (`Settings` → `Secrets and variables` → `Actions` → `Variables`).
+À ne faire que si plus rien d'autre n'utilise ce Docker ni ce `~/.cargo`.
+
+**Ce qui reste partagé avec le poste**, à titre d'information : le `~/.cargo`
+de l'utilisateur (les jobs y alimentent le registre, et `taiki-e/install-action` y
+dépose cargo-nextest, cargo-llvm-cov et cargo-deny) ; son `~/.rustup`, que
+`dtolnay/rust-toolchain` met à jour et auquel il ajoute des toolchains ; les
+images que les jobs tirent (`postgres`, les images de base des `Dockerfile`),
+qui s'ajoutent à celles de ses autres projets ; et son Docker rootless, donc
+le port `127.0.0.1:5432` que le `ci-postgres` occupe le temps d'une
+exécution. Rien de cela n'est nettoyé par défaut.
 
 ## Durcissement à prévoir
 

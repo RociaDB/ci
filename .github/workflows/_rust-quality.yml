@@ -79,7 +79,15 @@ jobs:
           # Identifiants laissés aux valeurs par défaut de l'image, qui sont
           # aussi celles du module postgres de testcontainers : un harnais qui
           # sait parler aux deux n'a alors qu'une adresse à changer.
+          # L'étiquette rociadb.ci=true désigne ce que la CI a créé : c'est
+          # elle que maintenance-runner.yml suit pour ne retirer que cela.
+          # --shm-size : Docker ne donne que 64 Mo de /dev/shm par défaut ; une
+          # suite qui ouvre beaucoup de bases jetables en parallèle épuisait la
+          # mémoire partagée de PostgreSQL (« could not resize shared memory
+          # segment … No space left on device »).
           docker run --detach --name ci-postgres \
+            --label rociadb.ci=true \
+            --shm-size=1g \
             --env POSTGRES_PASSWORD=postgres \
             --env POSTGRES_INITDB_ARGS="$INITDB_ARGS" \
             --publish 127.0.0.1:5432:5432 \
@@ -139,9 +147,13 @@ jobs:
           retention-days: 7
 
       # Sur un runner persistant, un conteneur oublié survit à l'exécution.
+      # --volumes : l'image postgres déclare un VOLUME, que `docker rm` seul
+      # laisse derrière lui. Sans l'option, chaque exécution abandonnait sur
+      # le runner un volume anonyme de plusieurs gigaoctets — toutes les bases
+      # de la suite —, et la maintenance ne prune pas les volumes.
       - name: ramassage
         if: ${{ always() && inputs.postgres != '' }}
-        run: docker rm --force ci-postgres || true
+        run: docker rm --force --volumes ci-postgres || true
 
   compat:
     if: ${{ inputs.compat_versions != '[]' }}

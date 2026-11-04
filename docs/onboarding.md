@@ -199,16 +199,30 @@ alors **un par test** — des centaines, sur un runner persistant au disque
 contraint.
 
 Le harnais doit donc accepter un serveur fourni de l'extérieur, et ne démarrer
-le sien que si aucun ne l'est :
+le sien que si aucun ne l'est — **et tomber** quand la CI n'en fournit qu'une
+partie, ou n'en fournit pas du tout :
 
 ```rust
 fn externe() -> Option<Self> {
-    let hote = std::env::var("CI_POSTGRES_HOTE").ok()?;
-    let port = std::env::var("CI_POSTGRES_PORT").ok()?.parse().ok()?;
-    let docker = std::env::var("CI_POSTGRES_CONTENEUR").ok()?;
-    Some(Self { _conteneur: None, docker, hote, port })
+    let lire = |nom| std::env::var(nom).ok();
+    match (lire("CI_POSTGRES_HOTE"), lire("CI_POSTGRES_PORT"), lire("CI_POSTGRES_CONTENEUR")) {
+        (Some(hote), Some(port), Some(docker)) => {
+            let port = port.parse().expect("CI_POSTGRES_PORT n'est pas un port");
+            Some(Self { _conteneur: None, docker, hote, port })
+        }
+        // En local : rien de fourni, le harnais démarre le sien.
+        (None, None, None) if std::env::var_os("GITHUB_ACTIONS").is_none() => None,
+        (None, None, None) => panic!("en CI sans serveur : posez `postgres:` dans le stub"),
+        _ => panic!("CI à moitié configurée : les trois CI_POSTGRES_* vont ensemble"),
+    }
 }
 ```
+
+La première version de cet extrait se rabattait en silence sur testcontainers
+dès qu'une variable manquait ou qu'un port était illisible — et en CI, sans
+`postgres:` dans le stub, chaque processus nextest montait alors un
+PostgreSQL gardé dans un `static`, jamais retiré : des centaines de
+conteneurs, et une suite verte. Trouvé sur les dépôts V2 le 24 septembre 2026.
 
 Trois points s'ensuivent, et chacun a coûté une exécution rouge :
 
@@ -234,9 +248,19 @@ pour que chaque dépôt garde la main sur sa configuration :
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test:ci": "vitest run --reporter=junit --outputFile=junit.xml --coverage"
+    "test:ci": "vitest run --reporter=default --reporter=junit --outputFile.junit=junit.xml --coverage"
   }
 }
+```
+
+`--reporter=default` d'abord : `--reporter=junit` seul **remplace** le rapport
+de la console, et un test rouge ne s'y lit plus — il faut télécharger
+l'artefact. Et la couverture doit produire `coverage/lcov.info`, que le
+workflow téléverse et que Sonar lit : les rapports par défaut de Vitest n'en
+font pas. Dans `vite.config.ts` (ou `vitest.config.ts`) :
+
+```ts
+test: { coverage: { reporter: ['text', 'lcov'] } }
 ```
 
 ### 2.3 Configuration attendue (Python)
