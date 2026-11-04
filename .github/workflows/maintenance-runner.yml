@@ -1,8 +1,18 @@
-# Purge du runner self-hosted.
+# Ménage du runner self-hosted.
 #
 # rocia2 dispose de moins de 50 Go : les caches cargo et les couches Docker
 # saturent le disque en quelques semaines sans entretien. Ce nettoyage vit ici
 # plutôt que dans chaque dépôt, pour ne rien ajouter aux dépôts consommateurs.
+#
+# Deux régimes, selon la variable de dépôt ou d'organisation CI_MENAGE_COMPLET :
+#
+# - par défaut, un ménage SÉLECTIF : seul ce que la CI a créé est retiré (les
+#   conteneurs et volumes étiquetés rociadb.ci=true, les dossiers target du
+#   travail du runner). C'est le régime d'un runner qui partage sa machine
+#   avec un poste de travail : ses images, ses volumes, son ~/.cargo restent ;
+# - avec CI_MENAGE_COMPLET=true, le ménage COMPLET d'une machine dédiée : en
+#   plus, toutes les images Docker inutilisées, tous les volumes anonymes
+#   abandonnés, et le registre cargo du compte du runner.
 name: maintenance · runner
 
 on:
@@ -20,7 +30,46 @@ jobs:
       - name: espace disque avant
         run: df -h / | tail -1
 
+      # Les conteneurs que la CI lance portent --label rociadb.ci=true (le
+      # PostgreSQL de _rust-quality.yml). Leur étape de ramassage les retire
+      # déjà ; ceci rattrape ceux qu'une exécution interrompue a laissés.
+      # `rm --volumes` retire avec eux leurs volumes anonymes — celui que
+      # l'image postgres déclare, de plusieurs gigaoctets. Seuls les conteneurs
+      # arrêtés sont visés : un conteneur en marche n'est jamais touché.
+      #
+      # Hors champ : les conteneurs que lancent les suites de test des dépôts
+      # (testcontainers) et ceux des actions tierces (docker/setup-buildx-action
+      # démonte son constructeur lui-même en fin de job) ne portent pas
+      # l'étiquette ; le régime complet seul les ramasse.
+      - name: conteneurs de la CI arrêtés, avec leurs volumes
+        run: |
+          set -euo pipefail
+          docker container ls --all --quiet --filter label=rociadb.ci=true \
+            --filter status=exited --filter status=created --filter status=dead \
+            | xargs --no-run-if-empty docker rm --volumes
+
+      # `--all` étend le ménage aux volumes nommés, mais le filtre de
+      # l'étiquette le borne à ceux que la CI a créés et que plus aucun
+      # conteneur n'utilise.
+      - name: volumes de la CI inutilisés
+        run: docker volume prune --all --force --filter label=rociadb.ci=true
+
+      # Le cache de construction de buildx n'est pas touché dans ce régime :
+      # le constructeur est créé par une action tierce, sans étiquette, et son
+      # cache de couches vit dans GitHub (`type=gha`), pas sur le runner.
+      # Aucun `docker system prune`, aucun `docker builder prune`, rien sous
+      # ~/.cargo.
+
+      - name: travail des exécutions terminées
+        run: |
+          set -euo pipefail
+          find "${RUNNER_WORKSPACE%/*}" -maxdepth 2 -name target -type d -mtime +14 \
+            -exec rm -rf {} + 2>/dev/null || true
+
+      # ---- Ménage complet : machine dédiée seulement ----
+
       - name: images et couches Docker inutilisées
+        if: ${{ vars.CI_MENAGE_COMPLET == 'true' }}
         run: docker system prune --all --force --filter 'until=168h'
 
       # `system prune` ne touche pas aux volumes, et le filtre `until` ne s'y
@@ -28,21 +77,17 @@ jobs:
       # inutilisés (Docker ≥ 23) : ceux qu'un conteneur de test a laissés en
       # partant, jamais un volume nommé.
       - name: volumes anonymes abandonnés
+        if: ${{ vars.CI_MENAGE_COMPLET == 'true' }}
         run: docker volume prune --force
 
       - name: registre et caches cargo
+        if: ${{ vars.CI_MENAGE_COMPLET == 'true' }}
         run: |
           set -euo pipefail
           # Les sources décompressées se reconstruisent depuis le cache des
           # archives : les supprimer ne provoque qu'un retéléchargement partiel.
           rm -rf "${CARGO_HOME:-$HOME/.cargo}/registry/src" || true
           find "${CARGO_HOME:-$HOME/.cargo}/registry/cache" -type f -atime +30 -delete || true
-
-      - name: travail des exécutions terminées
-        run: |
-          set -euo pipefail
-          find "${RUNNER_WORKSPACE%/*}" -maxdepth 2 -name target -type d -mtime +14 \
-            -exec rm -rf {} + 2>/dev/null || true
 
       - name: espace disque après
         run: df -h / | tail -1

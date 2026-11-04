@@ -79,7 +79,10 @@ jobs:
           # Identifiants laissés aux valeurs par défaut de l'image, qui sont
           # aussi celles du module postgres de testcontainers : un harnais qui
           # sait parler aux deux n'a alors qu'une adresse à changer.
+          # L'étiquette rociadb.ci=true désigne ce que la CI a créé : c'est
+          # elle que maintenance-runner.yml suit pour ne retirer que cela.
           docker run --detach --name ci-postgres \
+            --label rociadb.ci=true \
             --env POSTGRES_PASSWORD=postgres \
             --env POSTGRES_INITDB_ARGS="$INITDB_ARGS" \
             --publish 127.0.0.1:5432:5432 \
