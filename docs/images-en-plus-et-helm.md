@@ -66,7 +66,7 @@ si le dépôt a plusieurs charts à versionner chacun.
 
 | Workflow | Job | Fait |
 |---|---|---|
-| `_helm-quality.yml` | `quality` | Pour chaque chart : `helm lint` puis `helm template`, avec les valeurs par défaut et avec chaque fichier de `values_files` |
+| `_helm-quality.yml` | `quality` | Pour chaque chart : `helm lint` avec les valeurs par défaut ; puis `helm lint` et `helm template` avec chaque fichier de `values_files` qui le concerne ; sans fichier qui le concerne, `helm template` avec les valeurs par défaut |
 | `_helm-main.yml` | `quality` | Le même gate, rejoué sur `main` |
 | | `release-please` | Calcule la version, ouvre la Release PR |
 | | `publish` | À la création d'une release : `helm package` et `helm push` de chaque chart vers `oci://ghcr.io/<organisation>/charts` |
@@ -77,7 +77,7 @@ Entrées (`_helm-quality.yml` ; `_helm-main.yml` les reprend, plus `release_type
 |---|---|---|
 | `runs_on` | `ubuntu-latest` | Runner |
 | `charts` | `'["."]'` | Répertoires des charts : `'["charts/socle","charts/plateforme"]'` |
-| `values_files` | `'[]'` | Fichiers de valeurs rendus en plus : `'["ci/banc.yaml"]'`. Chemins **relatifs à chaque chart** : un chart utilise ceux qu'il contient, un fichier qu'aucun chart ne contient est une erreur |
+| `values_files` | `'[]'` | Fichiers de valeurs rendus en plus : `'["ci/banc.yaml"]'`. Chemins **relatifs à chaque chart** : un chart utilise ceux qu'il contient, un fichier qu'aucun chart ne contient est une erreur. Un chart que concerne au moins un fichier n'est pas rendu avec ses seules valeurs par défaut (le lint, lui, les garde) : un chart qui exige des valeurs (`required`) ne se rend pas sans elles |
 | `helm_version` | `v4.3.1` | Installé par `azure/setup-helm@v4` |
 | `release_type` | `helm` | Stratégie de release-please. Vide : le mode manifeste |
 
