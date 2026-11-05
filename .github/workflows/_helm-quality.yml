@@ -1,10 +1,12 @@
 # Helm — gate de qualité. Appelé sur PR par le stub du dépôt, et sur main par _helm-main.yml.
 # Nom de job figé : quality sert de required status check.
 #
-# Pour chaque chart : helm lint, puis helm template, avec les valeurs par défaut
-# du chart et avec chaque fichier de valeurs demandé. Un chart qui ne se rend pas
-# avec les valeurs qu'on déploie réellement est un chart cassé, même s'il passe
-# le lint.
+# Pour chaque chart : helm lint avec les valeurs par défaut ; puis helm lint et
+# helm template avec chaque fichier de valeurs qui le concerne ; sans fichier qui
+# le concerne, helm template avec les valeurs par défaut. Un chart qui ne se rend
+# pas avec les valeurs qu'on déploie réellement est un chart cassé, même s'il
+# passe le lint. Un chart qui exige des valeurs (required) ne se rend pas sans
+# elles : c'est voulu, et c'est pourquoi on le rend avec ses fichiers de valeurs.
 name: helm · quality
 
 on:
@@ -26,7 +28,9 @@ on:
           Tableau JSON de fichiers de valeurs, relatifs au répertoire de CHAQUE
           chart, ex. ["ci/banc.yaml","ci/production.yaml"]. Un chart utilise
           ceux qu'il contient ; un fichier qu'aucun chart ne contient est une
-          erreur (faute de frappe). Défaut [] : valeurs par défaut seulement.
+          erreur (faute de frappe). Un chart que concerne au moins un fichier n'est
+          pas rendu avec ses seules valeurs par défaut (le lint, lui, les garde).
+          Défaut [] : valeurs par défaut seulement.
         type: string
         default: '[]'
       helm_version:
@@ -65,8 +69,8 @@ jobs:
             fi
 
             helm lint "$chart"
-            helm template ci "$chart" > /dev/null
 
+            appliques=0
             while read -r fichier; do
               [ -n "$fichier" ] || continue
               if [ -f "$chart/$fichier" ]; then
@@ -74,8 +78,14 @@ jobs:
                 helm lint "$chart" --values "$chart/$fichier"
                 helm template ci "$chart" --values "$chart/$fichier" > /dev/null
                 echo "$fichier" >> "$utilises"
+                appliques=$((appliques + 1))
               fi
             done < <(jq -r '.[]' <<<"$VALUES_FILES")
+            # Aucun fichier de valeurs ne concerne ce chart : on le rend avec
+            # ses valeurs par défaut.
+            if [ "$appliques" -eq 0 ]; then
+              helm template ci "$chart" > /dev/null
+            fi
             echo "::endgroup::"
           done < <(jq -r '.[]' <<<"$CHARTS")
 
