@@ -371,7 +371,7 @@ Série tranchée le 2026-09-20. Toutes les questions ouvertes sont closes.
 | # | Question | Décision |
 |---|---|---|
 | Q1 | Plan GitHub | **Passage en Team.** Voir A4 — required checks réellement bloquants sur les 14 dépôts |
-| Q2 | Registre des images privées | **GHCR + purge automatique.** Job planifié : suppression des versions non taguées, rétention des N dernières |
+| Q2 | Registre des images privées | **GHCR + purge automatique.** Job planifié : suppression des versions non taguées, rétention des N dernières. **Purge retirée le 7 nov. 2026** : elle effaçait les manifestes des images multi-arch (voir plus bas) |
 | Q3 | Langages des dépôts privés | **Les trois** — Rust, Node/TypeScript et Python sont présents |
 | Q4 | Périmètre Squash TM | **Tous les tests, unitaires inclus.** Cas de test créés par les testeurs, pas par le pipeline |
 | Q5 | Amorçage des versions | **Aucun tag existant** — release-please démarre à `0.1.0`, rien à amorcer |
@@ -416,12 +416,21 @@ Moins de 50 Go sur `rocia2`, avec des caches cargo et des couches Docker qui
 grossissent à chaque exécution. `maintenance-runner.yml` s'en charge chaque
 dimanche.
 
-Côté GHCR, la purge n'est **pas** un job planifié central : l'endpoint
+Côté GHCR, la purge n'a **pas** été un job planifié central : l'endpoint
 d'énumération des packages d'une organisation refuse les jetons d'App
-(HTTP 400 sur `package_type=container`). Elle est donc intégrée au job `docker`,
-juste après le push, avec le `GITHUB_TOKEN` du dépôt sur son propre package —
-ce qui la fait tourner exactement quand le stockage grossit, sans secret
-supplémentaire.
+(HTTP 400 sur `package_type=container`). Elle a donc été intégrée au job `docker`,
+juste après le push, avec le `GITHUB_TOKEN` du dépôt sur son propre package.
+
+**Elle est retirée depuis le 7 novembre 2026.** GHCR range les manifestes d'une
+image multi-arch (amd64, arm64 et leurs attestations de provenance) en versions
+sans étiquette ; seul l'index porte les tags. `actions/delete-package-versions`
+(`delete-only-untagged-versions`) effaçait donc ces manifestes juste après le
+push : les cinq images 1.0.0 ne gardaient que leur index, et aucun nœud ne les
+tirait (« not found » sur le manifeste amd64). La rétention (`min-versions-to-keep`)
+comptait aussi ces manifestes comme des versions : cinq par image publiée. Les
+versions effacées ont été restaurées par l'API (GitHub les garde 30 jours). Un
+nettoyage qui reconnaît les index reste à choisir avant que le stockage ne
+serre (2 Go).
 
 Tout l'outillage étant préinstallé, les actions de setup servent uniquement de
 garde-fou de version — elles ne réinstallent rien en pratique.

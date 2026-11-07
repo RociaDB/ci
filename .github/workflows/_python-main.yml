@@ -26,10 +26,6 @@ on:
       docker:
         type: boolean
         default: false
-      image_retention:
-        description: "Nombre de versions d'image taguées à conserver sur GHCR."
-        type: string
-        default: '10'
       squash_tm:
         type: boolean
         default: false
@@ -200,26 +196,12 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # La purge vit ici plutôt que dans un job planifié central : l'endpoint
-      # d'énumération des packages d'une organisation refuse les jetons d'App
-      # (HTTP 400 sur package_type=container). Le GITHUB_TOKEN du dépôt, lui,
-      # suffit pour son propre package — et c'est ici que le stockage grossit.
-      - name: purge des versions non taguées
-        uses: actions/delete-package-versions@v5
-        continue-on-error: true
-        with:
-          package-name: ${{ github.event.repository.name }}
-          package-type: container
-          delete-only-untagged-versions: true
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - name: rétention des versions taguées
-        uses: actions/delete-package-versions@v5
-        continue-on-error: true
-        with:
-          package-name: ${{ github.event.repository.name }}
-          package-type: container
-          min-versions-to-keep: ${{ inputs.image_retention }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+      # Pas de purge ici (7 novembre 2026). ghcr.io range les manifestes d'une
+      # image multi-arch (amd64, arm64 et leurs attestations) en versions sans
+      # étiquette : `actions/delete-package-versions` les effaçait juste après la
+      # poussée, il ne restait que l'index et aucune image ne se tirait. La
+      # rétention, elle, comptait ces manifestes comme des versions. Un nettoyage
+      # qui reconnaît les index reste à choisir (docs/cadrage.md, Q2).
 
   squash-tm:
     if: ${{ needs.release-please.outputs.release_created == 'true' && inputs.squash_tm }}

@@ -55,8 +55,8 @@ USER nonroot:nonroot
 ENTRYPOINT ["/usr/local/bin/rocia-agent"]
 ```
 
-Les mêmes purges que l'image principale s'appliquent à chaque image en plus
-(versions non taguées, puis `image_retention`).
+Comme pour l'image principale, aucune purge ne suit la poussée : elle effaçait
+les manifestes des images multi-arch (voir `docs/cadrage.md`, Q2).
 
 ## Les charts Helm
 
