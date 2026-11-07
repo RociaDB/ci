@@ -60,10 +60,6 @@ on:
           dist/${TARGETARCH}/<binary>. Défaut [] : aucune image en plus.
         type: string
         default: '[]'
-      image_retention:
-        description: "Nombre de versions d'image taguées à conserver sur GHCR."
-        type: string
-        default: '10'
       squash_tm:
         description: 'Publier les résultats de tests dans Squash TM au moment du release.'
         type: boolean
@@ -274,26 +270,12 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # La purge vit ici plutôt que dans un job planifié central : l'endpoint
-      # d'énumération des packages d'une organisation refuse les jetons d'App
-      # (HTTP 400 sur package_type=container). Le GITHUB_TOKEN du dépôt, lui,
-      # suffit pour son propre package — et c'est ici que le stockage grossit.
-      - name: purge des versions non taguées
-        uses: actions/delete-package-versions@v5
-        continue-on-error: true
-        with:
-          package-name: ${{ github.event.repository.name }}
-          package-type: container
-          delete-only-untagged-versions: true
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - name: rétention des versions taguées
-        uses: actions/delete-package-versions@v5
-        continue-on-error: true
-        with:
-          package-name: ${{ github.event.repository.name }}
-          package-type: container
-          min-versions-to-keep: ${{ inputs.image_retention }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+      # Pas de purge ici (7 novembre 2026). ghcr.io range les manifestes d'une
+      # image multi-arch (amd64, arm64 et leurs attestations) en versions sans
+      # étiquette : `actions/delete-package-versions` les effaçait juste après la
+      # poussée, il ne restait que l'index et aucune image ne se tirait. La
+      # rétention, elle, comptait ces manifestes comme des versions. Un nettoyage
+      # qui reconnaît les index reste à choisir (docs/cadrage.md, Q2).
 
   # Une image par entrée de extra_images, à partir des binaires du job docker.
   # Job voisin plutôt que boucle dans docker : le nombre d'images est une donnée,
@@ -398,24 +380,7 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.image.suffix }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image.suffix }}
 
-      - name: purge des versions non taguées
-        if: ${{ steps.existe.outputs.existe == 'false' }}
-        uses: actions/delete-package-versions@v5
-        continue-on-error: true
-        with:
-          package-name: ${{ github.event.repository.name }}-${{ matrix.image.suffix }}
-          package-type: container
-          delete-only-untagged-versions: true
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - name: rétention des versions taguées
-        if: ${{ steps.existe.outputs.existe == 'false' }}
-        uses: actions/delete-package-versions@v5
-        continue-on-error: true
-        with:
-          package-name: ${{ github.event.repository.name }}-${{ matrix.image.suffix }}
-          package-type: container
-          min-versions-to-keep: ${{ inputs.image_retention }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+      # Pas de purge : voir la note du job docker.
 
   squash-tm:
     if: ${{ needs.release-please.outputs.release_created == 'true' && inputs.squash_tm }}

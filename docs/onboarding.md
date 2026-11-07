@@ -64,8 +64,10 @@ Aucune *Organization permission* n'est nécessaire.
 > La permission **Packages** n'est plus requise. Elle l'était pour une purge
 > GHCR centralisée, abandonnée : l'endpoint d'énumération des packages d'une
 > organisation refuse les jetons d'App (HTTP 400 sur `package_type=container`).
-> La purge se fait désormais dans le job `docker`, avec le `GITHUB_TOKEN` du
-> dépôt. Si elle a déjà été accordée, elle peut rester sans inconvénient.
+> La purge s'est ensuite faite dans le job `docker`, avec le `GITHUB_TOKEN` du
+> dépôt, puis a été retirée le 7 novembre 2026 (elle effaçait les manifestes des
+> images multi-arch, voir `docs/cadrage.md`). Si la permission a déjà été
+> accordée, elle peut rester sans inconvénient.
 
 → **Create GitHub App**
 
