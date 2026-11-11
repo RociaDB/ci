@@ -1,5 +1,5 @@
-# Les dépôts fusionnent en squash : le titre de la PR devient le message de
-# commit, et c'est lui que release-please lit. Déclencheur séparé de ci.yml pour
+# Les dépôts fusionnent par commit de fusion : le titre de la PR passe dans son
+# corps, et c'est lui que release-please lit. Déclencheur séparé de ci.yml pour
 # ne pas relancer toute la CI à chaque modification du titre.
 name: PR title
 on:
