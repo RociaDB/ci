@@ -38,7 +38,7 @@ jobs:
   _node-*.yml          idem pour Node et TypeScript (package npm ou Nuxt SSR)
   _python-*.yml        idem pour Python (gestionnaire uv)
   _helm-*.yml          idem pour des charts Helm, publiés en OCI sur GHCR
-  _pr-title.yml        lint du titre de PR — squash-merge oblige
+  _pr-title.yml        lint du titre de PR — c'est lui que release-please lit
   maintenance-runner.yml  ménage hebdomadaire de rocia2 (sélectif ; complet sur option)
 actions/
   squash-tm-publish/   action composite enveloppant le script de publication
@@ -52,7 +52,7 @@ templates/             fichiers à copier dans un dépôt consommateur
 ```
 PR vers main ─────────► quality (+ titre de PR)          required checks
                             │
-                        merge squash
+                        merge de la PR
                             ▼
 push sur main ────────► quality → sonar
                             └───► release-please ──► Release PR perpétuelle

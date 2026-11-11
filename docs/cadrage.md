@@ -322,6 +322,11 @@ En squash-merge, le titre de la PR devient le message de commit, donc c'est lui
 que release-please lit. `amannn/action-semantic-pull-request` en check, et merge
 commit / rebase à désactiver dans les settings de chaque dépôt.
 
+> **Révisé le 4 novembre 2026** : les dépôts de V2 fusionnent par commit de
+> fusion, pour garder l'historique des branches. Le titre de la PR passe dans le
+> corps du commit de fusion et reste ce que release-please lit : le lint du titre
+> ne change pas. Voir [`conventions.md`](conventions.md).
+
 ### G2 — Ruleset d'organisation sur les 14 dépôts
 
 Le plan Team (A4) lève la restriction : un ruleset unique au niveau organisation

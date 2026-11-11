@@ -302,9 +302,15 @@ minimum de configuration locale est donc inévitable.
 Ces réglages ne sont pas des fichiers et ne peuvent pas être factorisés.
 
 `Settings` → `General` → `Pull Requests` :
-- cocher **Allow squash merging** uniquement ;
-- décocher merge commits et rebase merging — c'est ce qui garantit que le titre
-  de la PR devient le message de commit, donc que release-please le lit ;
+- cocher **Allow merge commits**, « Default commit message » sur **Default
+  message** : GitHub met le titre de la PR dans le corps du commit de fusion, et
+  release-please le lit là. C'est ainsi qu'on fusionne
+  ([`conventions.md`](conventions.md)) ;
+- **Allow squash merging** peut rester coché : au squash, vérifier le titre
+  proposé, car pour une branche d'un seul commit GitHub reprend le titre de ce
+  commit et non celui de la PR ;
+- décocher rebase merging : les commits de la branche arriveraient sur `main`
+  sans le titre de la PR ;
 - cocher **Automatically delete head branches**.
 
 `Settings` → `Environments` → créer `release` :
@@ -331,13 +337,14 @@ n'entre dans aucun appariement, et un job qui ne trouve personne reste en
 1. Ouvrir une PR de test avec un titre conventionnel, par exemple
    `chore: câblage de la CI partagée`.
 2. Vérifier que deux checks apparaissent : `pr / quality` et `title / pr-title`.
-3. Les laisser passer au vert, puis merger en squash.
+3. Les laisser passer au vert, puis fusionner par « Merge pull request ».
 4. Sur `main`, vérifier que `release-please` ouvre une Release PR.
 5. Merger la Release PR : le tag `v0.1.0` est créé, et les jobs `publish`,
    `docker` et `squash-tm` activés se déclenchent.
 
-Si `release-please` n'ouvre pas de PR : le titre du commit de merge n'est
-probablement pas conventionnel, ou l'App n'a pas accès au dépôt.
+Si `release-please` n'ouvre pas de PR : le titre de la PR n'est probablement
+pas conventionnel (ou, après un squash, GitHub a gardé le titre du commit), ou
+l'App n'a pas accès au dépôt.
 
 Si la Release PR n'a aucun check : l'App n'est pas utilisée — vérifier
 `RELEASE_APP_ID` et `RELEASE_APP_PRIVATE_KEY`.
