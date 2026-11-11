@@ -1,8 +1,8 @@
 # Lint du titre de pull request.
 #
-# Les dépôts fusionnent en squash : c'est donc le TITRE de la PR qui devient le
-# message de commit, et c'est lui que release-please lit pour calculer la
-# prochaine version. Linter les commits de la branche ne servirait à rien.
+# Les dépôts fusionnent par commit de fusion : GitHub en met le TITRE de la PR
+# dans le corps, et c'est lui que release-please lit pour calculer la prochaine
+# version. Les commits de la branche, écrits en prose, ne sont pas lintés.
 #
 # Workflow distinct du gate de qualité parce qu'il doit écouter le type `edited` :
 # le mettre sur le workflow principal relancerait toute la CI à chaque

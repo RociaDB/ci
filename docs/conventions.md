@@ -2,9 +2,16 @@
 
 ## Commits et titres de PR
 
-Les dépôts fusionnent en **squash** : le titre de la PR devient le message de
-commit, et c'est lui que release-please lit pour calculer la version. C'est donc
-le **titre de la PR** qui est linté, pas les commits de la branche.
+Les dépôts fusionnent par **commit de fusion** (« Merge pull request ») : GitHub
+écrit le titre de la PR dans le corps du commit de fusion, et c'est lui que
+release-please lit pour calculer la version. C'est donc le **titre de la PR**
+qui est linté, pas les commits de la branche. Ceux-ci arrivent aussi sur `main` :
+écrits en prose, release-please les ignore ; un titre de commit conventionnel
+compterait en plus de celui de la PR.
+
+Le squash reste permis, mais il a un piège : pour une branche d'un seul commit,
+GitHub propose le titre de ce commit, pas celui de la PR, et release-please ne
+voit alors rien. Au squash, remettre le titre de la PR avant de valider.
 
 Types acceptés : `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`,
 `ci`, `chore`, `revert`. Le sujet commence par une minuscule.
