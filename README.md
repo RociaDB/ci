@@ -40,6 +40,7 @@ jobs:
   _helm-*.yml          idem pour des charts Helm, publiés en OCI sur GHCR
   _pr-title.yml        lint du titre de PR — c'est lui que release-please lit
   maintenance-runner.yml  ménage hebdomadaire de rocia2 (sélectif ; complet sur option)
+  selftest-app-token.yml  à la demande : vérifie le jeton de la GitHub App de release-please
 actions/
   squash-tm-publish/   action composite enveloppant le script de publication
 scripts/squash_tm/     lecture JUnit, normalisation des références, publication
