@@ -85,6 +85,9 @@ jobs:
           # suite qui ouvre beaucoup de bases jetables en parallèle épuisait la
           # mémoire partagée de PostgreSQL (« could not resize shared memory
           # segment … No space left on device »).
+          # Un ci-postgres laissé par un job coupé (le runner arrêté avant son
+          # ramassage) refuserait son nom au suivant.
+          docker rm --force --volumes ci-postgres >/dev/null 2>&1 || true
           docker run --detach --name ci-postgres \
             --label rociadb.ci=true \
             --shm-size=1g \
@@ -92,11 +95,19 @@ jobs:
             --env POSTGRES_INITDB_ARGS="$INITDB_ARGS" \
             --publish 127.0.0.1:5432:5432 \
             "$IMAGE"
+          # Par TCP (-h 127.0.0.1) : l'initialisation de l'image démarre d'abord
+          # un serveur provisoire, qui n'écoute que sur sa socket, puis l'arrête
+          # et démarre le vrai. Interrogé par la socket, le provisoire passait
+          # pour prêt, et la vérification suivante tombait sur son arrêt
+          # (« no response », vu sur un runner rapide le 22 novembre 2026).
           for _ in $(seq 60); do
-            docker exec ci-postgres pg_isready -U postgres >/dev/null 2>&1 && break
+            docker exec ci-postgres pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1 && break
             sleep 1
           done
-          docker exec ci-postgres pg_isready -U postgres
+          if ! docker exec ci-postgres pg_isready -h 127.0.0.1 -U postgres; then
+            docker logs ci-postgres 2>&1 | tail -n 30
+            exit 1
+          fi
           {
             echo "DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres"
             echo "CI_POSTGRES_HOTE=127.0.0.1"
