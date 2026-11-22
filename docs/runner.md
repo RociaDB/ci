@@ -6,7 +6,9 @@ Depuis le 22 novembre 2026, le label `rocia2` est porté par **`ovh-ci-1`**, une
 machine dédiée (8 vCPU, 32 Go de mémoire, 8 Go d'échange), sous un compte
 `runner` sans `sudo`, en service systemd. Le runner d'avant tournait sur un poste
 de travail : une CI y a épuisé la mémoire (17 Gio) à côté d'un cluster, et le
-poste a redémarré. Un seul runner, donc **exécution sérialisée**.
+poste a redémarré. Ce runner du poste reste enregistré : son propriétaire le
+lance quand il le souhaite, et il prend alors des jobs `rocia2` lui aussi.
+D'ordinaire, un seul runner tourne, donc **exécution sérialisée**.
 
 Sur une machine neuve, Docker et buildx sont installés ; les actions de setup
 installent Rust, Node, pnpm, protoc et helm au premier job.
