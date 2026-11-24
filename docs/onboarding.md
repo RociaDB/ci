@@ -263,7 +263,16 @@ Les identifiants de la base de CI sont ceux du module `postgres` de
 testcontainers (`postgres`/`postgres`), précisément pour qu'un tel harnais
 n'ait qu'une adresse à changer.
 
-### 2.2 Scripts attendus (Node)
+### 2.2 Node — interrupteurs, scripts attendus
+
+| Input | Quand l'activer |
+|---|---|
+| `node_version` | Défaut `22`. Celle du dépôt, s'il en déclare une autre |
+| `postgres: postgres:16-alpine` | La suite a besoin d'une base. Même serveur et mêmes variables que pour Rust (§2.1) : `DATABASE_URL`, `CI_POSTGRES_HOTE`, `CI_POSTGRES_PORT` et `CI_POSTGRES_CONTENEUR`, identifiants `postgres`/`postgres`. Au dépôt de les lire, dans `test:ci` par exemple, plutôt que de lire `DATABASE_URL`, qu'un poste de développement peut avoir pointée sur sa vraie base |
+| `format: false` | Le dépôt n'a pas de formateur : l'étape `format` est sautée, et le journal le montre |
+
+Les deux derniers vont aussi bien au job `pr` (`_node-quality.yml`) qu'au job
+`main` (`_node-main.yml`, qui les transmet).
 
 Le workflow appelle des scripts `package.json` plutôt que des outils en dur,
 pour que chaque dépôt garde la main sur sa configuration :
@@ -385,8 +394,8 @@ utilise le mode simple de release-please (une version par dépôt). Un versionna
 par crate demanderait le mode manifest, non implémenté — à traiter le jour où un
 dépôt le demande.
 
-**Des tests nécessitant un service externe.** Le cadrage indique qu'il n'y en a
-pas. Si cela change, ajouter un bloc `services:` demandera une évolution du
+**Des tests nécessitant un service externe.** PostgreSQL est couvert, par
+l'input `postgres` (§2.1 et §2.2). Un autre service demandera une évolution du
 workflow réutilisable, pas du dépôt.
 
 **Un workspace Cargo dont la version vit dans `[workspace.package]`.** La
