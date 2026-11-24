@@ -21,6 +21,19 @@ on:
         description: 'Exécuter pnpm audit. Non bloquant pendant la stabilisation.'
         type: boolean
         default: true
+      format:
+        description: >
+          Exécuter `pnpm run format:check`. false pour un dépôt sans formateur :
+          l'étape est alors sautée, et le journal le montre.
+        type: boolean
+        default: true
+      postgres:
+        description: >
+          Image PostgreSQL à démarrer pour les tests du job quality, ex.
+          postgres:16-alpine. Vide : aucune base. Expose DATABASE_URL et les
+          CI_POSTGRES_* aux tests, comme _rust-quality.yml.
+        type: string
+        default: ''
 
 permissions: {}
 
@@ -41,7 +54,39 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
+      # Même serveur, mêmes identifiants et mêmes variables que dans
+      # _rust-quality.yml : un seul PostgreSQL pour tout le job, retiré au
+      # ramassage. Voir ce fichier pour le pourquoi de chaque option.
+      - name: PostgreSQL de test
+        if: ${{ inputs.postgres != '' }}
+        env:
+          IMAGE: ${{ inputs.postgres }}
+        run: |
+          set -euo pipefail
+          docker rm --force --volumes ci-postgres >/dev/null 2>&1 || true
+          docker run --detach --name ci-postgres \
+            --label rociadb.ci=true \
+            --shm-size=1g \
+            --env POSTGRES_PASSWORD=postgres \
+            --publish 127.0.0.1:5432:5432 \
+            "$IMAGE"
+          for _ in $(seq 60); do
+            docker exec ci-postgres pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1 && break
+            sleep 1
+          done
+          if ! docker exec ci-postgres pg_isready -h 127.0.0.1 -U postgres; then
+            docker logs ci-postgres 2>&1 | tail -n 30
+            exit 1
+          fi
+          {
+            echo "DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres"
+            echo "CI_POSTGRES_HOTE=127.0.0.1"
+            echo "CI_POSTGRES_PORT=5432"
+            echo "CI_POSTGRES_CONTENEUR=ci-postgres"
+          } >> "$GITHUB_ENV"
+
       - name: format
+        if: ${{ inputs.format }}
         run: pnpm run format:check
       - name: lint
         if: ${{ !cancelled() }}
@@ -67,6 +112,12 @@ jobs:
             coverage/lcov.info
           if-no-files-found: warn
           retention-days: 7
+
+      # --volumes : l'image postgres déclare un VOLUME, que `docker rm` seul
+      # laisse sur le runner (voir _rust-quality.yml).
+      - name: ramassage
+        if: ${{ always() && inputs.postgres != '' }}
+        run: docker rm --force --volumes ci-postgres || true
 
   compat:
     if: ${{ inputs.compat_versions != '[]' }}

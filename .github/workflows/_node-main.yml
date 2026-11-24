@@ -16,6 +16,14 @@ on:
       audit:
         type: boolean
         default: true
+      format:
+        description: 'Voir _node-quality.yml.'
+        type: boolean
+        default: true
+      postgres:
+        description: 'Voir _node-quality.yml.'
+        type: string
+        default: ''
       sonar:
         description: "Nécessite un runner sur le tailnet — dépôts privés uniquement."
         type: boolean
@@ -77,6 +85,8 @@ jobs:
       runs_on: ${{ inputs.runs_on }}
       node_version: ${{ inputs.node_version }}
       audit: ${{ inputs.audit }}
+      format: ${{ inputs.format }}
+      postgres: ${{ inputs.postgres }}
 
   sonar:
     if: ${{ inputs.sonar }}
